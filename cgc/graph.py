@@ -22,6 +22,10 @@ class ComputationalGraph:
         self._aggregators = dict()
         self._constraints = dict()
 
+        self.unknown_functions_loss_multipler = 1000
+        self.contraints_loss_multiplier = 1000
+        self.data_compliance_loss_multipler = 1000
+
     def _get_callable_parameter(self, parameter_name: str):
         callable_parameter = None
         for container in [self._observables, self._unknown_functions, self._known_functions, self._aggregators]:
@@ -57,6 +61,17 @@ class ComputationalGraph:
         self._constraints[target] = KnownFunction(callable_parameter, fn)
 
 
+    def set_loss_multipliers(
+        self,
+        unknown_functions_loss_multiplier: float = 1000,
+        constraints_loss_multiplier: float = 1000,
+        data_compliance_loss_multiplier: float = 1000
+    ):
+        self.unknown_functions_loss_multipler = unknown_functions_loss_multiplier
+        self.contraints_loss_multiplier = constraints_loss_multiplier
+        self.data_compliance_loss_multipler = data_compliance_loss_multiplier
+
+
     def _loss(self, Z, X, M):
         rkhs_norms = 0
         unknown_funcs_loss = 0
@@ -67,12 +82,17 @@ class ComputationalGraph:
             rkhs_norms += fn.rkhs_norm(Z)
             unknown_funcs_loss += jnp.sum(jnp.square(fn(Z) - Z[:, self._observables_order.get(fn_name)]))
 
+        multipled_unknwon_funcs_loss = self.unknown_functions_loss_multipler * unknown_funcs_loss
+
         for (_, fn) in self._constraints.items():
             constraints_loss += jnp.sum(jnp.square(fn(Z)))
 
-        data_compliance_loss += jnp.sum(jnp.square(jnp.where(M, Z, 0) - jnp.where(M, X, 0)))
+        multiplied_constraints_loss = self.contraints_loss_multiplier * constraints_loss
 
-        total_loss = rkhs_norms + 1000 * unknown_funcs_loss + 1000 * constraints_loss + 1000 * data_compliance_loss
+        data_compliance_loss += jnp.sum(jnp.square(jnp.where(M, Z, 0) - jnp.where(M, X, 0)))
+        multiplied_data_compliance_loss = self.data_compliance_loss_multipler * data_compliance_loss
+
+        total_loss = rkhs_norms + multipled_unknwon_funcs_loss + multiplied_constraints_loss + multiplied_data_compliance_loss
 
         return total_loss
 
