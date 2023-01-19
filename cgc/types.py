@@ -40,7 +40,10 @@ class Aggregator(CallableInterface):
         self.parameters = parameters
 
     def __call__(self, Z):
-        return tuple(parameter(Z) for parameter in self.parameters)
+        evaluated_parameters = [parameter(Z) for parameter in self.parameters]
+        parameters_2d = [parameter[:, jnp.newaxis] if parameter.ndim == 1 else parameter for parameter in evaluated_parameters]
+        return jnp.concatenate(parameters_2d, axis=1)
+    
 
 
 class UnknownFunction(Function):
