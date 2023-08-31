@@ -1,3 +1,4 @@
+from typing import Any
 import jax.numpy as jnp
 import jax
 
@@ -8,8 +9,11 @@ class RBFKernel:
         self.gamma = gamma
         self._vf = None
 
+        self._metric = lambda x, y: jnp.dot((x - y), (x - y))
+
     def __call__(self, x, X_train):
-        return jnp.exp((-(x - X_train) ** 2) / (2 * (self.gamma ** 2)))
+        dists = jax.vmap(lambda X: self._metric(X / self.gamma, x / self.gamma))(X_train)
+        return jnp.exp(-0.5 * dists)
 
     def matrix(self, X_train):
         if X_train.ndim > 1:
@@ -17,7 +21,7 @@ class RBFKernel:
         else:
             N = X_train.size
         
-        X_train = jnp.reshape(X_train, (-1, 1))
-        K =  jnp.exp((-(X_train - X_train.T) ** 2) / (2 * (self.gamma ** 2)))
+        dists = jax.vmap(lambda scaled_X: jax.vmap(lambda scaled_y: self._metric(scaled_X, scaled_y))(X_train / self.gamma))(X_train / self.gamma)
+        K =  jnp.exp(-0.5 * dists)
 
         return K + self.alpha * jnp.eye(N)
