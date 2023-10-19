@@ -48,25 +48,48 @@ class Aggregator(CallableInterface):
 
 class UnknownFunction(Function):
 
-    def __init__(self, parameter, target_index, kernel="rbf", alpha=1.0, gamma=1.0):
+    def __init__(self, parameter, kernel="rbf", alpha=1.0, gamma=1.0, linear_functional=None, observation=None):
         super().__init__(parameter)
-        self.target_index = target_index
+        self.observation = observation
 
-        self.kernel = RBFKernel(alpha, gamma)
-
-        self._f = lambda x, X_train, y_train: self.kernel(x, X_train) @ jnp.linalg.solve(self.kernel.matrix(X_train), y_train)
+        self.kernel = RBFKernel(alpha, gamma, linear_functional=linear_functional)
         self._vf =  jax.vmap(self._f, in_axes=(0, None, None), out_axes=0)
 
+    def _f(self, x, X_train, y_train):
+        matrix = self.kernel.matrix(X_train)
+        sims = self.kernel(x, X_train)
+
+        _, matrix_trainling_dim_size = matrix.shape
+        observation_leading_dim_size, *_ = y_train.shape
+        *_, sims_trailing_dim_size = sims.shape
+
+        if matrix_trainling_dim_size != observation_leading_dim_size:
+            y_train = jnp.reshape(y_train, (matrix_trainling_dim_size, ), order='F')
+
+        if matrix_trainling_dim_size != sims_trailing_dim_size:
+            sims = jnp.reshape(sims, (matrix_trainling_dim_size, ), order='F')
+
+        return sims @ jnp.linalg.solve(matrix, y_train)
+        
     def evaluate(self, x, y):
         return self._vf(x, x, y)
 
     def __call__(self, Z):
-        return self.evaluate(self.parameter(Z), jnp.asarray(Z[:, self.target_index]))
+        return self.evaluate(self.parameter(Z), self.observation(Z))
 
     def rkhs_norm(self, Z):
+        matrix = self.kernel.matrix(self.parameter(Z))
+        observations = jnp.asarray(self.observation(Z))
+
+        _, matrix_trainling_dim_size = matrix.shape
+        observation_leading_dim_size, *_ = observations.shape
+
+        if matrix_trainling_dim_size != observation_leading_dim_size:
+            observations = jnp.reshape(observations, (matrix_trainling_dim_size, ), order='F')
+        
         return jnp.sum(
             jnp.square(
-                jnp.asarray(Z[:, self.target_index].T) @ jnp.linalg.solve(self.kernel.matrix(self.parameter(Z)), jnp.asarray(Z[:, self.target_index]))
+               observations.T @ jnp.linalg.solve(matrix, observations)
             )
         )
 
@@ -76,14 +99,14 @@ class UnknownFunctionDerivative(Function):
     def __init__(self, parameter):
         super().__init__(parameter)
 
-        self._df = jax.grad(self.parameter._f)
+        self._df = jax.jacobian(self.parameter._f)
         self._vdf = jax.vmap(self._df, in_axes=(0, None, None), out_axes=0)
 
     def evaluate(self, x, y):
         return self._vdf(x, x, y)
 
     def __call__(self, Z):
-        return self.evaluate(self.parameter.parameter(Z), jnp.asarray(Z[:, self.parameter.target_index]))
+        return self.evaluate(self.parameter.parameter(Z), jnp.asarray(self.parameter.observation(Z)))
 
 
 class KnownFunction(Function):
