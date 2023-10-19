@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 
 from cgc.types import Observable, Aggregator, UnknownFunction, KnownFunction, Function, UnknownFunctionDerivative
-from cgc.optimizers import NormalizedGDOptimizer, ProjectedNGDOptimizer
+from cgc.optimizers import NormalizedGDOptimizer, ProjectedNGDOptimizer, BFGSOptimizer
 
 def derivative(fn: Function):
     if isinstance(fn, UnknownFunction):
@@ -32,6 +32,9 @@ class ComputationalGraph:
             if parameter_name in container:
                 callable_parameter = container.get(parameter_name)
                 break
+
+        if callable_parameter is None and parameter_name in self._observables_order:
+            callable_parameter =  Observable(self._observables_order.get(parameter_name))
         
         if callable_parameter is None:
             raise KeyError(f"Parameter {parameter_name} is not defined")
@@ -41,9 +44,13 @@ class ComputationalGraph:
     def add_observable(self, name: str):
         self._observables[name] = Observable(self._observables_order.get(name))
 
-    def add_unknown_fn(self, parameter: str, target: str, alpha=1, gamma=1):
+    def add_unknown_fn(self, parameter: str, target: str, alpha=1, gamma=1, linear_functional=None, observations=None):
         callable_parameter = self._get_callable_parameter(parameter)
-        self._unknown_functions[target] = UnknownFunction(callable_parameter, target_index=self._observables_order.get(target), alpha=alpha, gamma=gamma)
+        callable_observation = self._get_callable_parameter(target if not linear_functional else observations)
+        self._unknown_functions[target] = UnknownFunction(
+            callable_parameter, alpha=alpha, gamma=gamma,
+            linear_functional=linear_functional, observation=callable_observation
+        )
 
     def add_known_fn(self, parameter: str, target: str, fn):
         callable_parameter = self._get_callable_parameter(parameter)
@@ -99,7 +106,7 @@ class ComputationalGraph:
 
     def complete(self, X, M, optimizer="normalized-gd"):
 
-        optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else ProjectedNGDOptimizer
+        optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
         optimizer_obj = optimizer_class(self._loss)
 
         Z_initial = X.copy()
