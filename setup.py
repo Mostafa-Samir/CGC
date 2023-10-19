@@ -9,7 +9,8 @@ requirements = [
     "jax",
     "jaxlib",
     "numpy",
-    "tqdm"
+    "tqdm", 
+    "jaxopt"
 ]
 
 dev_requirements = [
