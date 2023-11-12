@@ -77,4 +77,28 @@ class BFGSOptimizer():
         pbar.close()
         
         return Z
+    
+
+class BFGSOptimizerForKF():
+    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 1000):
+        self.loss_fn = loss_fn
+        self.jitted_loss = jax.jit(loss_fn)
+        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000)
+        #self.jitted_update_step = jax.jit(self._optimizer.update)
+
+    def run(self, params, Z):
+        pbar = trange(self._optimizer.maxiter)
+        def progressbar_callback(params):
+            loss = self.jitted_loss(params, Z)
+            pbar.set_description(f"Loss: {loss:.4f}")
+            pbar.update(1)
+
+        self._optimizer.callback = progressbar_callback
+
+        params, *_ = self._optimizer.run(params, Z)
+
+        pbar.close()
+        
+        return params
+
 
