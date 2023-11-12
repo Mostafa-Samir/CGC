@@ -3,6 +3,23 @@ import jax.numpy as jnp
 import numpy as np
 import jax
 
+def tensor_to_matrix(tensor):
+    if tensor.ndim == 4:
+        w1, w2, h1, h2 = tensor.shape
+        tensor = jnp.reshape(jnp.transpose(tensor, (0, 2, 1, 3)), (w1 * h1, w2 * h2), order='F')
+
+    return tensor
+
+def get_regulaization_term(kernel_matrix, alpha):
+    N, *_ = kernel_matrix.shape
+    
+    eye = jnp.eye(N)
+    if kernel_matrix.ndim > 2:
+        for _ in range(kernel_matrix.ndim - 2):
+            eye = eye[..., jnp.newaxis]
+    
+    return alpha * eye
+
 def identity_functional(f, argnums):
     return f
 
@@ -15,22 +32,20 @@ class RBFKernel:
         self._vf = None
 
     def _eval(self, x, y):
-        diff = (x - y) / self.gamma
+        diff = (x - y) / self.gamma()
         return jnp.exp(-0.5 * jnp.dot(diff, diff))
 
     def __call__(self, x, X_train):
         operated_eval = self.linear_functional(self._eval, argnums=1)
         return jax.vmap(operated_eval, in_axes=(None, 0))(x, X_train)
 
-    def matrix(self, X_train):
+    def matrix(self, X_train, convert_tesnor_to_matrix=True):
         N, *_ = X_train.shape
         
         operated_eval = self.linear_functional(self.linear_functional(self._eval, argnums=0), argnums=1)
         K = jax.vmap(lambda x: jax.vmap(lambda y: operated_eval(x, y))(X_train))(X_train)
 
-        if K.ndim == 4:
-            w, _, h, _ = K.shape
-            K = jnp.reshape(jnp.transpose(K, (0, 2, 1, 3)), (w * h, w * h), order='F')
-            N = w * h
+        if convert_tesnor_to_matrix:
+            K = tensor_to_matrix(K)
 
-        return K + self.alpha * jnp.eye(N)
+        return K + get_regulaization_term(K, self.alpha)
