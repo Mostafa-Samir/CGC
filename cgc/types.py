@@ -54,7 +54,7 @@ class UnknownFunction(Function):
         self.gamma = gamma
         self.alpha = alpha
         self.kernel = RBFKernel(alpha, gamma, linear_functional=linear_functional)
-        self._vf =  jax.vmap(self._f, in_axes=(0, None, None), out_axes=0)
+        self._vf =  jax.vmap(self._f, in_axes=(0, None, None, None), out_axes=0)
 
     def _f(self, x, X_train, y_train, gamma=None):
         matrix = self.kernel.matrix(X_train, gamma)
