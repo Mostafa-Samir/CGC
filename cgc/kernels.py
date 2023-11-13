@@ -38,7 +38,7 @@ class RBFKernel:
 
     def __call__(self, x, X_train, gamma=None):
         operated_eval = self.linear_functional(self._eval, argnums=1)
-        return jax.vmap(operated_eval, in_axes=(None, 0))(x, X_train, gamma)
+        return jax.vmap(operated_eval, in_axes=(None, 0, None))(x, X_train, gamma)
 
     def matrix(self, X_train, gamma=None, convert_tesnor_to_matrix=True):
         N, *_ = X_train.shape
