@@ -56,9 +56,9 @@ class UnknownFunction(Function):
         self.kernel = RBFKernel(alpha, gamma, linear_functional=linear_functional)
         self._vf =  jax.vmap(self._f, in_axes=(0, None, None), out_axes=0)
 
-    def _f(self, x, X_train, y_train):
-        matrix = self.kernel.matrix(X_train)
-        sims = self.kernel(x, X_train)
+    def _f(self, x, X_train, y_train, gamma=None):
+        matrix = self.kernel.matrix(X_train, gamma)
+        sims = self.kernel(x, X_train, gamma)
 
         _, matrix_trainling_dim_size = matrix.shape
         observation_leading_dim_size, *_ = y_train.shape
@@ -72,14 +72,14 @@ class UnknownFunction(Function):
 
         return sims @ jnp.linalg.solve(matrix, y_train)
         
-    def evaluate(self, x, y):
-        return self._vf(x, x, y)
+    def evaluate(self, x, y, gamma=None):
+        return self._vf(x, x, y, gamma)
 
-    def __call__(self, Z):
-        return self.evaluate(self.parameter(Z), self.observation(Z))
+    def __call__(self, Z, gamma=None):
+        return self.evaluate(self.parameter(Z), self.observation(Z), gamma)
 
-    def rkhs_norm(self, Z):
-        matrix = self.kernel.matrix(self.parameter(Z))
+    def rkhs_norm(self, Z, gamma=None):
+        matrix = self.kernel.matrix(self.parameter(Z), gamma=gamma)
         observations = jnp.asarray(self.observation(Z))
 
         _, matrix_trainling_dim_size = matrix.shape
@@ -88,54 +88,87 @@ class UnknownFunction(Function):
         if matrix_trainling_dim_size != observation_leading_dim_size:
             observations = jnp.reshape(observations, (matrix_trainling_dim_size, ), order='F')
         
-        return jnp.sum(
-            jnp.square(
-               observations.T @ jnp.linalg.solve(matrix, observations)
-            )
-        )
+        return jnp.square(observations.T @ jnp.linalg.solve(matrix, observations))
     
-    def kflow_loss(self, gamma, Z, sample_ratio=0.5, n_samples=10):
-        self.gamma.update(gamma)
 
-        K_matrix = self.kernel.matrix(self.parameter(Z), convert_tesnor_to_matrix=False)
-        K_matrix = K_matrix - get_regulaization_term(K_matrix, self.alpha)
-        N, *_ = K_matrix.shape
-
-        observations = jnp.asarray(self.observation(Z))
-
-        w_full = None
-        full_norm = None
+    def kflow_loss(self, gamma, Z, sample_ratio=0.5, n_samples=20):
 
         loss = 0
-        n_observations, *_ = Z.shape
-        sample_size = int(sample_ratio * n_observations)
+        
         key = jax.random.PRNGKey(seed=42)
+        n_observations, *_ = Z.shape
+        permutation = jax.random.permutation(key, n_observations)
+        permuted_Z = Z[permutation, :]
+
+        K = self.kernel.matrix(self.parameter(permuted_Z), gamma, convert_tesnor_to_matrix=False)
+        O = jnp.array(self.observation(permuted_Z))
+
+        K_mat = tensor_to_matrix(K)
+        N_mat, *_ = K_mat.shape
+        O_vec = jnp.reshape(O, (N_mat, ), order='F')
+        rkhs_full = O_vec.T @ jnp.linalg.solve(K_mat, O_vec)
+
+        sample_size = int(n_observations * sample_ratio)
 
         for _ in range(n_samples):
-            sample_indecies = jax.random.choice(key, n_observations, shape=(sample_size, ), replace=False)
-            sample_indecies = jnp.sort(sample_indecies)
+            key, subkey = jax.random.split(key)
+            sample_indecies = jax.random.choice(subkey, permutation, shape=(sample_size, ), replace=False)
 
-            K_matrix_sample = tensor_to_matrix(K_matrix[jnp.ix_(sample_indecies, sample_indecies)])
-            N_sample, *_ = K_matrix_sample.shape
+            K_sample = K[jnp.ix_(sample_indecies, sample_indecies)]
+            O_sample = O[sample_indecies]
+            K_sample_mat = tensor_to_matrix(K_sample)
+            N_sample_mat, *_ = K_sample_mat.shape
+            O_sample_vec = jnp.reshape(O_sample, (N_sample_mat, ), order='F')
+            rkhs_sample = O_sample_vec.T @ jnp.linalg.solve(K_sample_mat, O_sample_vec)
+
             
-            K_matrix_cross = tensor_to_matrix(K_matrix[jnp.ix_(jnp.arange(N), sample_indecies)])
-            
-            observations_sample = jnp.reshape(observations[sample_indecies, ...], (N_sample, ), order='F')
+            loss += 1 - (rkhs_sample / rkhs_full)
 
-            if w_full is None:
-                K_matrix_full = tensor_to_matrix(K_matrix)
-                N_full, *_ = K_matrix_full.shape
+        loss /= n_samples
 
-                observations_full = jnp.reshape(observations, (N_full, ), order='F')
-                w_full = jnp.linalg.solve(K_matrix_full + get_regulaization_term(K_matrix_full, self.alpha), observations_full)
-                full_norm = w_full @ K_matrix_full @ w_full
+        return loss
 
-            w_sample = jnp.linalg.solve(K_matrix_sample + get_regulaization_term(K_matrix_sample, self.alpha), observations_sample)
-            sample_norm = w_sample @ K_matrix_sample @ w_sample
-
-            loss += 1 + ((sample_norm - 2 * w_full @ K_matrix_cross @ w_sample) / full_norm)
-
-        return loss / n_samples
+    #def kflow_loss(self, gamma, Z, sample_ratio=0.5, n_samples=10):
+#
+    #    K_matrix = self.kernel.matrix(self.parameter(Z), gamma=gamma, convert_tesnor_to_matrix=False)
+    #    K_matrix = K_matrix - get_regulaization_term(K_matrix, self.alpha)
+    #    N, *_ = K_matrix.shape
+#
+    #    observations = jnp.asarray(self.observation(Z))
+#
+    #    w_full = None
+    #    full_norm = None
+#
+    #    loss = 0
+    #    n_observations, *_ = Z.shape
+    #    sample_size = int(sample_ratio * n_observations)
+    #    key = jax.random.PRNGKey(seed=42)
+#
+    #    for _ in range(n_samples):
+    #        sample_indecies = jax.random.choice(key, n_observations, shape=(sample_size, ), replace=False)
+    #        sample_indecies = jnp.sort(sample_indecies)
+#
+    #        K_matrix_sample = tensor_to_matrix(K_matrix[jnp.ix_(sample_indecies, sample_indecies)])
+    #        N_sample, *_ = K_matrix_sample.shape
+#
+    #        K_matrix_cross = tensor_to_matrix(K_matrix[jnp.ix_(jnp.arange(N), sample_indecies)])
+    #        
+    #        observations_sample = jnp.reshape(observations[sample_indecies, ...], (N_sample, ), order='F')
+#
+    #        if w_full is None:
+    #            K_matrix_full = tensor_to_matrix(K_matrix)
+    #            N_full, *_ = K_matrix_full.shape
+#
+    #            observations_full = jnp.reshape(observations, (N_full, ), order='F')
+    #            w_full = jnp.linalg.solve(K_matrix_full + get_regulaization_term(K_matrix_full, self.alpha), observations_full)
+    #            full_norm = w_full @ K_matrix_full @ w_full
+#
+    #        w_sample = jnp.linalg.solve(K_matrix_sample + get_regulaization_term(K_matrix_sample, self.alpha), observations_sample)
+    #        sample_norm = w_sample @ K_matrix_sample @ w_sample
+#
+    #        loss += 1 + ((sample_norm - 2 * w_full @ K_matrix_cross @ w_sample) / full_norm)
+#
+    #    return loss / n_samples
 
 
 
