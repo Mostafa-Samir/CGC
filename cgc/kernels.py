@@ -31,19 +31,20 @@ class RBFKernel:
         self.linear_functional = linear_functional or identity_functional
         self._vf = None
 
-    def _eval(self, x, y):
-        diff = (x - y) / self.gamma()
+    def _eval(self, x, y, gamma=None):
+        effective_gamma = self.gamma() if gamma is None else gamma
+        diff = (x - y) / effective_gamma
         return jnp.exp(-0.5 * jnp.dot(diff, diff))
 
-    def __call__(self, x, X_train):
+    def __call__(self, x, X_train, gamma=None):
         operated_eval = self.linear_functional(self._eval, argnums=1)
-        return jax.vmap(operated_eval, in_axes=(None, 0))(x, X_train)
+        return jax.vmap(operated_eval, in_axes=(None, 0))(x, X_train, gamma)
 
-    def matrix(self, X_train, convert_tesnor_to_matrix=True):
+    def matrix(self, X_train, gamma=None, convert_tesnor_to_matrix=True):
         N, *_ = X_train.shape
         
         operated_eval = self.linear_functional(self.linear_functional(self._eval, argnums=0), argnums=1)
-        K = jax.vmap(lambda x: jax.vmap(lambda y: operated_eval(x, y))(X_train))(X_train)
+        K = jax.vmap(lambda x: jax.vmap(lambda y: operated_eval(x, y, gamma=gamma))(X_train))(X_train)
 
         if convert_tesnor_to_matrix:
             K = tensor_to_matrix(K)
