@@ -1,10 +1,11 @@
 from typing import List
 
 import jax.numpy as jnp
+import jax
 
 
 from cgc.types import Observable, Aggregator, UnknownFunction, KnownFunction, Function, UnknownFunctionDerivative, ConstantParameter, LearnableParameter, CallableInterface
-from cgc.optimizers import NormalizedGDOptimizer, ProjectedNGDOptimizer, BFGSOptimizer, BFGSOptimizerForKF
+from cgc.optimizers import NormalizedGDOptimizer, ProjectedNGDOptimizer, BFGSOptimizer, BFGSOptimizerForKF, NormalizedGDOptimizerForKF
 
 def derivative(fn: Function):
     if isinstance(fn, UnknownFunction):
@@ -19,6 +20,7 @@ class ComputationalGraph:
         self._observables = dict()
         self._unknown_functions = dict()
         self._unknown_functions_with_learnable_parameters = []
+        self._unknown_functions_unconditioned = dict()
         self._known_functions = dict()
         self._aggregators = dict()
         self._constraints = dict()
@@ -58,6 +60,11 @@ class ComputationalGraph:
             callable_parameter, alpha=alpha, gamma=gamma,
             linear_functional=linear_functional, observation=callable_observation
         )
+        if linear_functional is not None:
+            self._unknown_functions_unconditioned[target] = UnknownFunction(
+                callable_parameter, alpha=alpha, gamma=gamma,
+                observation=self._get_callable_parameter(target)
+            )
 
     def add_known_fn(self, parameter: str, target: str, fn):
         callable_parameter = self._get_callable_parameter(parameter)
@@ -86,7 +93,7 @@ class ComputationalGraph:
         self.data_compliance_loss_multipler = data_compliance_loss_multiplier
 
 
-    def _loss(self, Z, X, M):
+    def _loss(self, Z, X, M, params=None):
         rkhs_norms = 0
         unknown_funcs_loss = 0
         data_compliance_loss = 0
@@ -138,7 +145,9 @@ class ComputationalGraph:
 
         optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
 
-        iterations = 10 if learn_parameters else 1
+        kf_opts = dict()
+
+        iterations = 20 if learn_parameters else 1
 
         Z = X.copy()
 
@@ -147,11 +156,26 @@ class ComputationalGraph:
             Z = optimizer_obj.run(Z, X, M)
 
             if learn_parameters:
-                params = self._gather_learnable_parameters_values()
-                opt = BFGSOptimizerForKF(self._total_kflow_loss)
-                params = opt.run(params, Z)
-                print(params)
-                self._scatter_learnable_parameters_values(params)
+                #params = self._gather_learnable_parameters_values()
+                for fn_name in self._unknown_functions_with_learnable_parameters:
+                    if fn_name in self._unknown_functions_unconditioned:
+                        fn = self._unknown_functions_unconditioned[fn_name]
+                    else:
+                        fn = self._unknown_functions[fn_name]
+
+                    if fn_name not in kf_opts:
+                        loss_fn = fn.kflow_loss
+                        opt = NormalizedGDOptimizerForKF(loss_fn, patience=50, min_improvement=0.0001)
+                        kf_opts[fn_name] = opt
+                    else:
+                        opt = kf_opts[fn_name]
+                        if hasattr(opt, 'early_stopper'):
+                            opt.early_stopper.reset()
+
+                    param_init = fn.gamma.value_
+                    param = opt.run(param_init, Z)
+                    print(f"{fn_name}: {param}")
+                    fn.gamma.update(param)
 
         print(self._gather_learnable_parameters_values)
 
