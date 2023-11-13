@@ -76,3 +76,8 @@ class EarlyStopper:
                 self.waiting += 1
 
         return improvement, stop
+    
+    def reset(self):
+        self.best_metric = None
+        self.best_epoch = None
+        self.waiting = 0
