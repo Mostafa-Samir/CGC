@@ -141,17 +141,17 @@ class ComputationalGraph:
             fn.gamma.update(params_values[i])
 
 
-    def complete(self, X, M, optimizer="normalized-gd", learn_parameters=False):
+    def complete(self, X, M, optimizer="normalized-gd", learn_parameters=False, n_rounds=10):
 
         optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
+        
 
         kf_opts = dict()
 
-        iterations = 20 if learn_parameters else 1
-
         Z = X.copy()
 
-        for _ in range(iterations):
+        for _ in range(n_rounds if learn_parameters else 1):
+            
             optimizer_obj = optimizer_class(self._loss)
             Z = optimizer_obj.run(Z, X, M)
 
