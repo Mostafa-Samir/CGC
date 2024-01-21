@@ -47,7 +47,7 @@ class ComputationalGraph:
     def add_observable(self, name: str):
         self._observables[name] = Observable(self._observables_order.get(name))
 
-    def add_unknown_fn(self, parameter: str, target: str, alpha=1, gamma=1, linear_functional=None, observations=None):
+    def add_unknown_fn(self, parameter: str, target: str, alpha=1, gamma=1, linear_functional=None, observations=None, kernel='rbf'):
 
         if not isinstance(gamma, CallableInterface):
             gamma = ConstantParameter(gamma)
@@ -58,12 +58,12 @@ class ComputationalGraph:
         callable_observation = self._get_callable_parameter(target if not linear_functional else observations)
         self._unknown_functions[target] = UnknownFunction(
             callable_parameter, alpha=alpha, gamma=gamma,
-            linear_functional=linear_functional, observation=callable_observation
+            linear_functional=linear_functional, observation=callable_observation, kernel=kernel
         )
         if linear_functional is not None:
             self._unknown_functions_unconditioned[target] = UnknownFunction(
                 callable_parameter, alpha=alpha, gamma=gamma,
-                observation=self._get_callable_parameter(target)
+                observation=self._get_callable_parameter(target), kernel=kernel
             )
 
     def add_known_fn(self, parameter: str, target: str, fn):
@@ -117,12 +117,13 @@ class ComputationalGraph:
 
         return total_loss
     
-    def _total_kflow_loss(self, params, Z):
+    def _total_kflow_loss(self, params, Z, M):
         total_loss = 0
-        constraint_loss = 0
-        for i, fn_name in enumerate(self._unknown_functions_with_learnable_parameters):
-            fn = self._unknown_functions[fn_name]
-            total_loss += fn.kflow_loss(params[i], Z)
+        fn_names = list(sorted(self._unknown_functions.keys()))
+        for i, fn_name in enumerate(fn_names):
+            if fn_name in self._unknown_functions_with_learnable_parameters:
+                fn = self._unknown_functions[fn_name]
+                total_loss += fn.kflow_loss(params, Z, M)
 
         return total_loss
     
@@ -140,8 +141,36 @@ class ComputationalGraph:
             fn = self._unknown_functions[fn_name]
             fn.gamma.update(params_values[i])
 
+    def _gather_parameters(self):
+        params = []
+        fn_names = list(sorted(self._unknown_functions.keys()))
+        for fn_name in fn_names:
+            params.append(self._unknown_functions[fn_name].gamma.value_)
 
-    def complete(self, X, M, optimizer="normalized-gd", learn_parameters=False, n_rounds=10):
+        return jnp.asarray(params)
+    
+    def report_kernel_params(self, prefix=""):
+        kernels_params = {}
+        for (fn_name, fn) in self._unknown_functions.items():
+            kernels_params[fn_name] = float(fn.gamma.value_)
+
+        print(f"{prefix}{kernels_params}")
+
+    def _scatter_parameters(self, params):
+        fn_names = list(sorted(self._unknown_functions.keys()))
+        for i, fn_name in enumerate(fn_names):
+            if fn_name in self._unknown_functions_with_learnable_parameters:
+                self._unknown_functions[fn_name].gamma.update(params[i])
+
+    def set_uknknow_fns_parameter_order(self):
+        fn_names = list(sorted(self._unknown_functions.keys()))
+        for i, fn_name in enumerate(fn_names):
+            self._unknown_functions[fn_name].parameter_order = i
+
+
+    def complete_(self, X, M, observations_end, optimizer="normalized-gd", learn_parameters=False, n_rounds=10):
+
+        self.set_uknknow_fns_parameter_order()
 
         optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
         
@@ -150,22 +179,32 @@ class ComputationalGraph:
 
         Z = X.copy()
 
+        best_cgc_loss = jnp.inf
+        best_params = None
+        best_Z = None
+
         for _ in range(n_rounds if learn_parameters else 1):
             
             optimizer_obj = optimizer_class(self._loss)
             Z = optimizer_obj.run(Z, X, M)
+            current_loss = self._loss(Z, X, M)
+
+            if current_loss < best_cgc_loss:
+                best_cgc_loss = current_loss
+                best_params = self._gather_parameters()
+                best_Z = Z
 
             if learn_parameters:
                 #params = self._gather_learnable_parameters_values()
                 for fn_name in self._unknown_functions_with_learnable_parameters:
-                    if fn_name in self._unknown_functions_unconditioned:
-                        fn = self._unknown_functions_unconditioned[fn_name]
-                    else:
-                        fn = self._unknown_functions[fn_name]
+                    #if fn_name in self._unknown_functions_unconditioned:
+                        #fn = self._unknown_functions_unconditioned[fn_name]
+                    #else:
+                    fn = self._unknown_functions[fn_name]
 
                     if fn_name not in kf_opts:
                         loss_fn = fn.kflow_loss
-                        opt = NormalizedGDOptimizerForKF(loss_fn, patience=50, min_improvement=0.0001)
+                        opt = NormalizedGDOptimizerForKF(loss_fn, patience=50, min_improvement=0.00001)
                         kf_opts[fn_name] = opt
                     else:
                         opt = kf_opts[fn_name]
@@ -173,11 +212,92 @@ class ComputationalGraph:
                             opt.early_stopper.reset()
 
                     param_init = fn.gamma.value_
-                    param = opt.run(param_init, Z)
+                    #parameter_mask = fn.parameter(M)
+                    #observation_mask = fn.observation(M)
+                    #final_mask = parameter_mask & observation_mask
+
+                    param = opt.run(param_init, Z[:observations_end, :], M)
                     print(f"{fn_name}: {param}")
                     fn.gamma.update(param)
 
-        print(self._gather_learnable_parameters_values)
+            #if learn_parameters:
+            #    params = self._gather_parameters()
+            #    opt = BFGSOptimizerForKF(self._total_kflow_loss, patience=50, min_improvement=0.0001)
+            #    new_params = opt.run(params, Z[:200, :], M)
+#
+            #    self._scatter_parameters(new_params)
+            #    self.report_kernel_params("\t")
+
+        if learn_parameters:
+            self._scatter_parameters(best_params)
+            Z = best_Z
+
+        return Z
+    
+    def complete(self, X, M, observations_end, optimizer="normalized-gd", learn_parameters=False, n_rounds=10):
+
+        self.set_uknknow_fns_parameter_order()
+
+
+        optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
+        
+
+        Z = X.copy()
+
+        best_cgc_loss = jnp.inf
+        best_params = None
+        best_Z = None
+
+        for i in range(n_rounds if learn_parameters else 1):
+
+            if i == 0 and learn_parameters:
+                kflow_opt = BFGSOptimizerForKF(self._total_kflow_loss, patience=50, min_improvement=0.00001)
+                
+                if hasattr(kflow_opt, 'early_stopper'):
+                    kflow_opt.early_stopper.reset()
+
+                params = self._gather_parameters()
+                new_params = kflow_opt.run(params, Z[:observations_end, :],  M)
+                self._scatter_parameters(new_params)
+                self.report_kernel_params()
+
+            
+            optimizer_obj = optimizer_class(self._loss)
+            Z = optimizer_obj.run(Z, X, M)
+            current_loss = self._loss(Z, X, M)
+
+            kflow_opt = None
+
+            if current_loss < best_cgc_loss:
+                best_cgc_loss = current_loss
+                best_params = self._gather_parameters()
+                best_Z = Z
+
+            if learn_parameters:
+                
+                kflow_opt = BFGSOptimizerForKF(self._total_kflow_loss, patience=50, min_improvement=0.00001)
+                
+                if hasattr(kflow_opt, 'early_stopper'):
+                    kflow_opt.early_stopper.reset()
+
+                params = self._gather_parameters()
+                new_params = kflow_opt.run(params, Z[:observations_end, :],  M)
+                self._scatter_parameters(new_params)
+                self.report_kernel_params()
+
+                if i == n_rounds - 1:
+                    optimizer_obj = optimizer_class(self._loss)
+                    Z = optimizer_obj.run(Z, X, M)
+                    current_loss = self._loss(Z, X, M)
+
+                    if current_loss < best_cgc_loss:
+                        best_cgc_loss = current_loss
+                        best_params = self._gather_parameters()
+                        best_Z = Z
+
+        if learn_parameters:
+            self._scatter_parameters(best_params)
+            Z = best_Z
 
         return Z
 

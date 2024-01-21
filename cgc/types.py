@@ -2,7 +2,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, List, Union
 
-from cgc.kernels import RBFKernel, tensor_to_matrix, get_regulaization_term
+from cgc.kernels import RBFKernel, tensor_to_matrix, get_regulaization_term, QuadraticKernel, QuadraticAdditiveKernel, CubicAdditiveKernel, CubicKernel
 
 import jax.numpy as jnp
 import jax
@@ -18,7 +18,7 @@ class Observable(CallableInterface):
     def __init__(self, index: int) -> None:
         self.index = index
 
-    def __call__(self, Z):
+    def __call__(self, Z, params=None):
         return jnp.asarray(Z[:, self.index])
 
 class Function(CallableInterface):
@@ -30,8 +30,8 @@ class Function(CallableInterface):
     def evaluate(self, Z):
         raise NotImplementedError()
 
-    def __call__(self, Z):
-        return self.evaluate(self.parameter(Z))
+    def __call__(self, Z, params=None):
+        return self.evaluate(self.parameter(Z, params))
 
 
 class Aggregator(CallableInterface):
@@ -39,8 +39,8 @@ class Aggregator(CallableInterface):
     def __init__(self, parameters: List[CallableInterface]) -> None:
         self.parameters = parameters
 
-    def __call__(self, Z):
-        evaluated_parameters = [parameter(Z) for parameter in self.parameters]
+    def __call__(self, Z, params=None):
+        evaluated_parameters = [parameter(Z, params) for parameter in self.parameters]
         parameters_2d = [parameter[:, jnp.newaxis] if parameter.ndim == 1 else parameter for parameter in evaluated_parameters]
         return jnp.concatenate(parameters_2d, axis=1)
     
@@ -53,7 +53,17 @@ class UnknownFunction(Function):
         self.observation = observation
         self.gamma = gamma
         self.alpha = alpha
-        self.kernel = RBFKernel(alpha, gamma, linear_functional=linear_functional)
+        self.parameter_order = None
+
+        kernels_dict = {
+            "rbf": RBFKernel,
+            "quadratic": QuadraticKernel,
+            "cubic": CubicKernel,
+            "quadratic+rbf": QuadraticAdditiveKernel,
+            "cubic+rbf": CubicAdditiveKernel,
+        }
+
+        self.kernel = kernels_dict.get(kernel)(alpha, gamma, linear_functional=linear_functional)
         self._vf =  jax.vmap(self._f, in_axes=(0, None, None, None), out_axes=0)
 
     def _f(self, x, X_train, y_train, gamma=None):
@@ -75,10 +85,12 @@ class UnknownFunction(Function):
     def evaluate(self, x, y, gamma=None):
         return self._vf(x, x, y, gamma)
 
-    def __call__(self, Z, gamma=None):
-        return self.evaluate(self.parameter(Z), self.observation(Z), gamma)
+    def __call__(self, Z, params=None):
+        gamma = None if params is None else params[self.parameter_order]
+        return self.evaluate(self.parameter(Z, params), self.observation(Z, params), gamma=gamma)
 
-    def rkhs_norm(self, Z, gamma=None):
+    def rkhs_norm(self, Z, params=None):
+        gamma = None if not params else params[self.parameter_order]
         matrix = self.kernel.matrix(self.parameter(Z), gamma=gamma)
         observations = jnp.asarray(self.observation(Z))
 
@@ -91,17 +103,17 @@ class UnknownFunction(Function):
         return jnp.square(observations.T @ jnp.linalg.solve(matrix, observations))
     
 
-    def kflow_loss(self, gamma, Z, sample_ratio=0.5, n_samples=20):
+    def kflow_loss_(self, params, Z, M, sample_ratio=0.5, n_samples=20):
 
         loss = 0
         
         key = jax.random.PRNGKey(seed=42)
         n_observations, *_ = Z.shape
         permutation = jax.random.permutation(key, n_observations)
-        permuted_Z = Z[permutation, :]
+        permuted_Z = Z[permutation]
 
-        K = self.kernel.matrix(self.parameter(permuted_Z), gamma, convert_tesnor_to_matrix=False)
-        O = jnp.array(self.observation(permuted_Z))
+        K = self.kernel.matrix(self.parameter(permuted_Z, params), params[self.parameter_order], convert_tesnor_to_matrix=False)
+        O = jnp.array(self.observation(permuted_Z, params))
 
         K_mat = tensor_to_matrix(K)
         N_mat, *_ = K_mat.shape
@@ -128,48 +140,48 @@ class UnknownFunction(Function):
 
         return loss
 
-    #def kflow_loss(self, gamma, Z, sample_ratio=0.5, n_samples=10):
-#
-    #    K_matrix = self.kernel.matrix(self.parameter(Z), gamma=gamma, convert_tesnor_to_matrix=False)
-    #    K_matrix = K_matrix - get_regulaization_term(K_matrix, self.alpha)
-    #    N, *_ = K_matrix.shape
-#
-    #    observations = jnp.asarray(self.observation(Z))
-#
-    #    w_full = None
-    #    full_norm = None
-#
-    #    loss = 0
-    #    n_observations, *_ = Z.shape
-    #    sample_size = int(sample_ratio * n_observations)
-    #    key = jax.random.PRNGKey(seed=42)
-#
-    #    for _ in range(n_samples):
-    #        sample_indecies = jax.random.choice(key, n_observations, shape=(sample_size, ), replace=False)
-    #        sample_indecies = jnp.sort(sample_indecies)
-#
-    #        K_matrix_sample = tensor_to_matrix(K_matrix[jnp.ix_(sample_indecies, sample_indecies)])
-    #        N_sample, *_ = K_matrix_sample.shape
-#
-    #        K_matrix_cross = tensor_to_matrix(K_matrix[jnp.ix_(jnp.arange(N), sample_indecies)])
-    #        
-    #        observations_sample = jnp.reshape(observations[sample_indecies, ...], (N_sample, ), order='F')
-#
-    #        if w_full is None:
-    #            K_matrix_full = tensor_to_matrix(K_matrix)
-    #            N_full, *_ = K_matrix_full.shape
-#
-    #            observations_full = jnp.reshape(observations, (N_full, ), order='F')
-    #            w_full = jnp.linalg.solve(K_matrix_full + get_regulaization_term(K_matrix_full, self.alpha), observations_full)
-    #            full_norm = w_full @ K_matrix_full @ w_full
-#
-    #        w_sample = jnp.linalg.solve(K_matrix_sample + get_regulaization_term(K_matrix_sample, self.alpha), observations_sample)
-    #        sample_norm = w_sample @ K_matrix_sample @ w_sample
-#
-    #        loss += 1 + ((sample_norm - 2 * w_full @ K_matrix_cross @ w_sample) / full_norm)
-#
-    #    return loss / n_samples
+    def kflow_loss(self, params, Z, M, sample_ratio=0.25, n_samples=20):
 
+
+        K_matrix = self.kernel.matrix(self.parameter(Z, params), convert_tesnor_to_matrix=False, gamma=params[self.parameter_order])
+        K_matrix = K_matrix - get_regulaization_term(K_matrix, self.alpha)
+        N, *_ = K_matrix.shape
+
+        observations = jnp.asarray(self.observation(Z, params))
+
+        w_full = None
+        full_norm = None
+
+        loss = 0
+        n_observations, *_ = Z.shape
+        sample_size = int(sample_ratio * n_observations)
+        key = jax.random.PRNGKey(seed=42)
+
+        for _ in range(n_samples):
+            sample_indecies = jax.random.choice(key, n_observations, shape=(sample_size, ), replace=False)
+            sample_indecies = jnp.sort(sample_indecies)
+
+            K_matrix_sample = tensor_to_matrix(K_matrix[jnp.ix_(sample_indecies, sample_indecies)])
+            N_sample, *_ = K_matrix_sample.shape
+
+            K_matrix_cross = tensor_to_matrix(K_matrix[jnp.ix_(jnp.arange(N), sample_indecies)])
+            
+            observations_sample = jnp.reshape(observations[sample_indecies, ...], (N_sample, ), order='F')
+
+            if w_full is None:
+                K_matrix_full = tensor_to_matrix(K_matrix)
+                N_full, *_ = K_matrix_full.shape
+
+                observations_full = jnp.reshape(observations, (N_full, ), order='F')
+                w_full = jnp.linalg.solve(K_matrix_full + get_regulaization_term(K_matrix_full, self.alpha), observations_full)
+                full_norm = w_full @ K_matrix_full @ w_full
+
+            w_sample = jnp.linalg.solve(K_matrix_sample + get_regulaization_term(K_matrix_sample, self.alpha), observations_sample)
+            sample_norm = w_sample @ K_matrix_sample @ w_sample
+
+            loss += 1 + ((sample_norm - 2 * w_full @ K_matrix_cross @ w_sample) / full_norm)
+
+        return loss / n_samples
 
 
 
@@ -184,8 +196,8 @@ class UnknownFunctionDerivative(Function):
     def evaluate(self, x, y):
         return self._vdf(x, x, y)
 
-    def __call__(self, Z):
-        return self.evaluate(self.parameter.parameter(Z), jnp.asarray(self.parameter.observation(Z)))
+    def __call__(self, Z, params=None):
+        return self.evaluate(self.parameter.parameter(Z, params), jnp.asarray(self.parameter.observation(Z, params)))
 
 
 class KnownFunction(Function):

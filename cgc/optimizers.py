@@ -86,16 +86,16 @@ class BFGSOptimizerForKF():
         self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000)
         #self.jitted_update_step = jax.jit(self._optimizer.update)
 
-    def run(self, params, Z):
+    def run(self, params, Z, M):
         pbar = trange(self._optimizer.maxiter)
         def progressbar_callback(params):
-            loss = self.jitted_loss(params, Z)
+            loss = self.jitted_loss(params, Z, M)
             pbar.set_description(f"Loss: {loss:.4f}")
             pbar.update(1)
 
         self._optimizer.callback = progressbar_callback
 
-        params, *_ = self._optimizer.run(params, Z)
+        params, *_ = self._optimizer.run(params, Z, M)
 
         pbar.close()
         
@@ -116,13 +116,13 @@ class GDOptimizerForKF:
     def update_step(self, params, Z):
         pass
 
-    def run(self, params, Z):
+    def run(self, params, Z, M):
 
         pbar = trange(self.iterations_max)
         for i in pbar:
-            loss = self.jitted_loss(params, Z)
+            loss = self.jitted_loss(params, Z, M)
             pbar.set_description(f"Loss: {loss:.4f}")
-            params = self.jitted_update_step(params, Z)
+            params = self.jitted_update_step(params, Z, M)
             _, stop = self.early_stopper.check(loss, i)
             if stop:
                 print(f"Stopped after {self.early_stopper.patience} steps with no improvment in Loss")
@@ -135,8 +135,8 @@ class GDOptimizerForKF:
 
 class NormalizedGDOptimizerForKF(GDOptimizerForKF):
 
-    def update_step(self, params, Z):
-        g = self.loss_grad(params, Z)
+    def update_step(self, params, Z, M):
+        g = self.loss_grad(params, Z, M)
         normed_g = g / jnp.linalg.norm(g)
         new_params = params - self.learning_rate * normed_g
         return new_params
