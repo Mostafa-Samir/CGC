@@ -2,7 +2,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, List, Union
 
-from cgc.kernels import RBFKernel, tensor_to_matrix, get_regulaization_term, QuadraticKernel, QuadraticAdditiveKernel, CubicAdditiveKernel, CubicKernel
+from cgc.kernels_old import RBFKernel, tensor_to_matrix, get_regulaization_term, QuadraticKernel, QuadraticAdditiveKernel, CubicAdditiveKernel, CubicKernel, PolyKernel, PolyAdditiveKernel
+from cgc.kernels.factory import KernelsFactory
 
 import jax.numpy as jnp
 import jax
@@ -48,27 +49,24 @@ class Aggregator(CallableInterface):
 
 class UnknownFunction(Function):
 
-    def __init__(self, parameter, kernel="rbf", alpha=1.0, gamma=1.0, linear_functional=None, observation=None):
+    #def __init__(self, parameter, kernel="rbf", alpha=1.0, gamma=1.0, linear_functional=None, observation=None):
+    def __init__(self, parameter, kernel, kernel_parameters, alpha=1.0, gamma=1.0, linear_functional=None, observation=None):
         super().__init__(parameter)
         self.observation = observation
-        self.gamma = gamma
+        #self.gamma = gamma
+        self.kernel_parameters = kernel_parameters
         self.alpha = alpha
-        self.parameter_order = None
+        #self.parameter_order = None
+        self.parameters_range = (None, None)
 
-        kernels_dict = {
-            "rbf": RBFKernel,
-            "quadratic": QuadraticKernel,
-            "cubic": CubicKernel,
-            "quadratic+rbf": QuadraticAdditiveKernel,
-            "cubic+rbf": CubicAdditiveKernel,
-        }
 
-        self.kernel = kernels_dict.get(kernel)(alpha, gamma, linear_functional=linear_functional)
+        #self.kernel = kernels_dict.get(kernel)(alpha, gamma, linear_functional=linear_functional)
+        self.kernel = KernelsFactory.create(kernel, kernel_parameters, alpha, linear_functional)
         self._vf =  jax.vmap(self._f, in_axes=(0, None, None, None), out_axes=0)
 
-    def _f(self, x, X_train, y_train, gamma=None):
-        matrix = self.kernel.matrix(X_train, gamma)
-        sims = self.kernel(x, X_train, gamma)
+    def _f(self, x, X_train, y_train, params_array=None):
+        matrix = self.kernel.matrix(X_train, params_array)
+        sims = self.kernel(x, X_train, params_array)
 
         _, matrix_trainling_dim_size = matrix.shape
         observation_leading_dim_size, *_ = y_train.shape
@@ -82,16 +80,18 @@ class UnknownFunction(Function):
 
         return sims @ jnp.linalg.solve(matrix, y_train)
         
-    def evaluate(self, x, y, gamma=None):
-        return self._vf(x, x, y, gamma)
+    def evaluate(self, x, y, params_array=None):
+        return self._vf(x, x, y, params_array)
 
     def __call__(self, Z, params=None):
-        gamma = None if params is None else params[self.parameter_order]
-        return self.evaluate(self.parameter(Z, params), self.observation(Z, params), gamma=gamma)
+        params_start, params_end = self.parameters_range
+        params_array = None if params is None else params[params_start:params_end]
+        return self.evaluate(self.parameter(Z, params), self.observation(Z, params), params_array=params_array)
 
     def rkhs_norm(self, Z, params=None):
-        gamma = None if not params else params[self.parameter_order]
-        matrix = self.kernel.matrix(self.parameter(Z), gamma=gamma)
+        params_start, params_end = self.parameters_range
+        params_array = None if params is None else params[params_start:params_end]
+        matrix = self.kernel.matrix(self.parameter(Z), params_array=params_array)
         observations = jnp.asarray(self.observation(Z))
 
         _, matrix_trainling_dim_size = matrix.shape
@@ -103,35 +103,43 @@ class UnknownFunction(Function):
         return jnp.square(observations.T @ jnp.linalg.solve(matrix, observations))
     
 
-    def kflow_loss_(self, params, Z, M, sample_ratio=0.5, n_samples=20):
+    def kflow_loss_(self, params, Z, M, original_params, trainable_mask, sample_ratio=0.5, n_samples=20):
 
         loss = 0
+
+        params_start, params_end = self.parameters_range
+        params_array = params[params_start:params_end]
+        #trainable_mask = trainable_mask[params_start: params_end]
+        #original_params = original_params[params_start:params_end]
+
+        #params_array = trainable_mask * params_array + (1 - trainable_mask) * original_params
         
         key = jax.random.PRNGKey(seed=42)
         n_observations, *_ = Z.shape
         permutation = jax.random.permutation(key, n_observations)
-        permuted_Z = Z[permutation]
 
-        K = self.kernel.matrix(self.parameter(permuted_Z, params), params[self.parameter_order], convert_tesnor_to_matrix=False)
-        O = jnp.array(self.observation(permuted_Z, params))
+        K = self.kernel.matrix(self.parameter(Z, params), params_array, convert_tesnor_to_matrix=False)
+        K = K - get_regulaization_term(K, self.alpha)
+        O = jnp.array(self.observation(Z, params))
 
         K_mat = tensor_to_matrix(K)
         N_mat, *_ = K_mat.shape
         O_vec = jnp.reshape(O, (N_mat, ), order='F')
-        rkhs_full = O_vec.T @ jnp.linalg.solve(K_mat, O_vec)
+        rkhs_full = O_vec.T @ jnp.linalg.solve(K_mat + get_regulaization_term(K_mat, self.alpha), O_vec)
 
         sample_size = int(n_observations * sample_ratio)
 
         for _ in range(n_samples):
             key, subkey = jax.random.split(key)
-            sample_indecies = jax.random.choice(subkey, permutation, shape=(sample_size, ), replace=False)
+            sample_indecies = jax.random.choice(subkey, n_observations, shape=(sample_size, ), replace=False)
+            sample_indecies = jnp.sort(sample_indecies)
 
             K_sample = K[jnp.ix_(sample_indecies, sample_indecies)]
             O_sample = O[sample_indecies]
             K_sample_mat = tensor_to_matrix(K_sample)
             N_sample_mat, *_ = K_sample_mat.shape
             O_sample_vec = jnp.reshape(O_sample, (N_sample_mat, ), order='F')
-            rkhs_sample = O_sample_vec.T @ jnp.linalg.solve(K_sample_mat, O_sample_vec)
+            rkhs_sample = O_sample_vec.T @ jnp.linalg.solve(K_sample_mat + get_regulaization_term(K_sample_mat, self.alpha), O_sample_vec)
 
             
             loss += 1 - (rkhs_sample / rkhs_full)
@@ -140,10 +148,13 @@ class UnknownFunction(Function):
 
         return loss
 
-    def kflow_loss(self, params, Z, M, sample_ratio=0.25, n_samples=20):
+    def kflow_loss(self, params, Z, M, original_params, trainable_mask, sample_ratio=0.5, n_samples=20):
+
+        params_start, params_end = self.parameters_range
+        params_array = params[params_start:params_end]
 
 
-        K_matrix = self.kernel.matrix(self.parameter(Z, params), convert_tesnor_to_matrix=False, gamma=params[self.parameter_order])
+        K_matrix = self.kernel.matrix(self.parameter(Z, params), params_array, convert_tesnor_to_matrix=False)
         K_matrix = K_matrix - get_regulaization_term(K_matrix, self.alpha)
         N, *_ = K_matrix.shape
 

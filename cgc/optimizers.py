@@ -1,7 +1,9 @@
 from abc import abstractmethod
 from typing import Callable
+from functools import partial
 
 import jax
+import numpy as np
 import jax.numpy as jnp
 from jax.scipy.optimize import minimize
 from tqdm import trange
@@ -57,17 +59,17 @@ class ProjectedNGDOptimizer(GDOptimizer):
         return new_Z
     
 class BFGSOptimizer():
-    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 1000):
+    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 10000,  options={"ftol": 1e-6}):
         self.loss_fn = loss_fn
         self.jitted_loss = jax.jit(loss_fn)
-        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000)
+        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000, options={"ftol": 1e-6})
         #self.jitted_update_step = jax.jit(self._optimizer.update)
 
-    def run(self, Z, X, M):
+    def run(self, Z, X, M, description_prefix=""):
         pbar = trange(self._optimizer.maxiter)
         def progressbar_callback(Z):
             loss = self.jitted_loss(Z, X, M)
-            pbar.set_description(f"Loss: {loss:.4f}")
+            pbar.set_description(f"{description_prefix} Loss: {loss:.4f}")
             pbar.update(1)
 
         self._optimizer.callback = progressbar_callback
@@ -83,23 +85,65 @@ class BFGSOptimizerForKF():
     def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 1000):
         self.loss_fn = loss_fn
         self.jitted_loss = jax.jit(loss_fn)
-        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000)
+        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=1000)
         #self.jitted_update_step = jax.jit(self._optimizer.update)
 
-    def run(self, params, Z, M):
+    def run(self, params, Z, M, original_params, trainable_mask):
         pbar = trange(self._optimizer.maxiter)
         def progressbar_callback(params):
-            loss = self.jitted_loss(params, Z, M)
+            loss = self.jitted_loss(params, Z, M, original_params, trainable_mask)
             pbar.set_description(f"Loss: {loss:.4f}")
             pbar.update(1)
 
         self._optimizer.callback = progressbar_callback
 
-        params, *_ = self._optimizer.run(params, Z, M)
+        params, *_ = self._optimizer.run(params, Z, M, original_params, trainable_mask)
 
         pbar.close()
         
         return params
+    
+
+class TwoStepsBFGSOptimizerForKF():
+    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 1000):
+        self.loss_fn = loss_fn
+        self.jitted_loss = jax.jit(loss_fn)
+        self._valgrad = jax.value_and_grad(loss_fn)
+        #self._optimizer = ScipyMinimize(method="L-BFGS-B", value_and_grad=self._effective_val_and_grad, jit=True, maxiter=10000)
+
+    def _effective_val_and_grad(self, params, Z, M, original_params, trainable_mask):
+        val, grad = self._valgrad(params, Z, M, original_params, trainable_mask)
+        eff_grad = grad * trainable_mask
+        return val, eff_grad
+
+    def run(self, params, Z, M, original_params, trainable_mask, sparse_mask, special_mask=None):
+
+        if special_mask is None:
+            special_mask = np.ones_like(trainable_mask)
+
+        def progressbar_callback(params, pass_name):
+            loss = self.jitted_loss(params, Z, M, original_params, trainable_mask)
+            pbar.set_description(f"({pass_name}) Loss: {loss:.4f}")
+            pbar.update(1)
+
+        # Parameters Pass
+        params_lernable_mask = trainable_mask * (1 - sparse_mask) * special_mask
+        params_optimizer = ScipyMinimize(method="L-BFGS-B", fun=self.loss_fn, value_and_grad=self._effective_val_and_grad, jit=True, maxiter=10000, options={"ftol": 1e-6})
+        pbar = trange(params_optimizer.maxiter)
+        params_optimizer.callback = partial(progressbar_callback, pass_name="Parameters Pass")
+        kparams, *_ = params_optimizer.run(params, Z, M, original_params, params_lernable_mask)
+        pbar.close()
+
+        # Weights Pass
+        weights_lernable_mask = trainable_mask * sparse_mask * special_mask
+        weights_optimizer = ScipyMinimize(method="L-BFGS-B", fun=self.loss_fn, value_and_grad=self._effective_val_and_grad, jit=True, maxiter=10000, options={"ftol": 1e-6})
+        pbar = trange(params_optimizer.maxiter)
+        weights_optimizer.callback = partial(progressbar_callback, pass_name="Weights Pass")
+        wparams, *_ = weights_optimizer.run(kparams, Z, M, np.array(kparams), weights_lernable_mask)
+        pbar.close()
+
+        
+        return wparams
 
 
 class GDOptimizerForKF:
@@ -116,13 +160,13 @@ class GDOptimizerForKF:
     def update_step(self, params, Z):
         pass
 
-    def run(self, params, Z, M):
-
+    def run(self, params, Z, M, original_params, trainable_mask, prefix=""):
+        
         pbar = trange(self.iterations_max)
         for i in pbar:
-            loss = self.jitted_loss(params, Z, M)
-            pbar.set_description(f"Loss: {loss:.4f}")
-            params = self.jitted_update_step(params, Z, M)
+            loss = self.jitted_loss(params, Z, M, original_params, trainable_mask)
+            pbar.set_description(f"({prefix}) Loss: {loss:.9f}")
+            params = self.jitted_update_step(params, Z, M, original_params, trainable_mask)
             _, stop = self.early_stopper.check(loss, i)
             if stop:
                 print(f"Stopped after {self.early_stopper.patience} steps with no improvment in Loss")
@@ -135,8 +179,83 @@ class GDOptimizerForKF:
 
 class NormalizedGDOptimizerForKF(GDOptimizerForKF):
 
-    def update_step(self, params, Z, M):
-        g = self.loss_grad(params, Z, M)
+    def update_step(self, params, Z, M, original_params, trainable_mask):
+        g = self.loss_grad(params, Z, M, original_params, trainable_mask)
         normed_g = g / jnp.linalg.norm(g)
-        new_params = params - self.learning_rate * normed_g
+        new_params = params - self.learning_rate * (normed_g * trainable_mask)
         return new_params
+    
+
+class TwoStepsNGDptimizerForKF(NormalizedGDOptimizerForKF):
+
+    def run(self, params, Z, M, original_params, trainable_mask, sparse_mask, special_mask=None):
+
+        if special_mask is None:
+            special_mask = np.ones_like(trainable_mask)
+
+         # Parameters Pass
+        params_lernable_mask = trainable_mask * (1 - sparse_mask) * special_mask
+        kparams = super().run(params, Z, M, np.array(params), params_lernable_mask, prefix="Parameters Pass")
+
+        self.early_stopper.reset()
+
+        # Weights Pass
+        weights_lernable_mask = trainable_mask * sparse_mask * special_mask
+        self.learning_rate *= 10
+        wparams = super().run(kparams, Z, M, np.array(kparams), weights_lernable_mask, prefix="Weights Pass")
+        
+        
+
+
+
+        return wparams
+    
+
+class BFGSOptimizerForLearningParams():
+    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 1000):
+        self.loss_fn = loss_fn
+        self.jitted_loss = jax.jit(loss_fn)
+        self._valgrad = jax.value_and_grad(self.loss_fn)
+        #self.jitted_update_step = jax.jit(self._optimizer.update)
+
+
+    def _effective_val_and_grad(self, params, Z, X, M, trainable_mask):
+        val, grad = self._valgrad(params, Z, X, M)
+        eff_grad = grad * trainable_mask
+        return val, eff_grad
+
+    def run(self, params, Z, X, M, trainable_mask, weights_mask, description_prefix=""):
+
+        def progressbar_callback(params, extras=""):
+            loss = self.jitted_loss(params, Z, X, M)
+            pbar.set_description(f"{description_prefix} {extras} Loss: {loss:.4f}")
+            pbar.update(1)
+        
+
+        interanl_params_mask = trainable_mask * (1 - weights_mask)
+        _optimizer = ScipyMinimize(
+            method="L-BFGS-B", 
+            fun=self.loss_fn, 
+            value_and_grad=partial(self._effective_val_and_grad, trainable_mask=interanl_params_mask),
+            jit=True, 
+            maxiter=10000
+        )
+        pbar = trange(_optimizer.maxiter)
+        _optimizer.callback = partial(progressbar_callback, extras="[Internal Params Pass]")
+        internal_params, *_ = _optimizer.run(params, Z, X, M)
+        pbar.close()
+
+        weights_params_mask = trainable_mask * weights_mask
+        _optimizer = ScipyMinimize(
+            method="L-BFGS-B", 
+            fun=self.loss_fn, 
+            value_and_grad=partial(self._effective_val_and_grad, trainable_mask=weights_params_mask),
+            jit=True, 
+            maxiter=10000
+        )
+        pbar = trange(_optimizer.maxiter)
+        _optimizer.callback = partial(progressbar_callback, extras="[Weights Pass]")
+        all_params, *_ = _optimizer.run(np.array(internal_params), Z, X, M)
+        pbar.close()
+        
+        return all_params

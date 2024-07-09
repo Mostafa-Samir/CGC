@@ -58,6 +58,34 @@ class RBFKernel:
             K = tensor_to_matrix(K)
 
         return K + get_regulaization_term(K, self.alpha)
+
+
+class PolyKernel:
+    
+    def __init__(self, alpha=1.0, gamma=1.0, linear_functional=None):
+        self.alpha = alpha
+        self.gamma = gamma
+        self.linear_functional = linear_functional or identity_functional
+        self._vf = None
+
+    def _eval(self, x, y, gamma=None):
+        effective_gamma = self.gamma() if gamma is None else gamma
+        return jnp.power(jnp.exp(jnp.dot(x, y)) + 1,  effective_gamma)
+
+    def __call__(self, x, X_train, gamma=None):
+        operated_eval = self.linear_functional(self._eval, argnums=1)
+        return jax.vmap(operated_eval, in_axes=(None, 0, None))(x, X_train, gamma)
+
+    def matrix(self, X_train, gamma=None, convert_tesnor_to_matrix=True):
+        N, *_ = X_train.shape
+        
+        operated_eval = self.linear_functional(self.linear_functional(self._eval, argnums=0), argnums=1)
+        K = jax.vmap(lambda x: jax.vmap(lambda y: operated_eval(x, y, gamma=gamma))(X_train))(X_train)
+
+        if convert_tesnor_to_matrix:
+            K = tensor_to_matrix(K)
+
+        return K + get_regulaization_term(K, self.alpha)
     
 
 class QuadraticKernel:
@@ -144,5 +172,22 @@ class CubicAdditiveKernel:
     def matrix(self, X_train, gamma=None, convert_tesnor_to_matrix=True):
         K_quad = self.quad_kernel.matrix(X_train, convert_tesnor_to_matrix=convert_tesnor_to_matrix)
         K_rbf = self.gaussian_kernel.matrix(X_train, convert_tesnor_to_matrix=convert_tesnor_to_matrix, gamma=gamma)
+
+        return K_quad + K_rbf
+    
+
+class PolyAdditiveKernel:
+
+    def __init__(self, alpha=1.0, gamma=1.0, linear_functional=None):
+        self.gamma = gamma
+        self.quad_kernel = PolyKernel(alpha, gamma=gamma, linear_functional=linear_functional)
+        self.gaussian_kernel = RBFKernel(alpha, gamma=ConstantParameter(2), linear_functional=linear_functional)
+
+    def __call__(self, x, X_train, gamma=None):
+        return self.quad_kernel(x, X_train, gamma=gamma) + self.gaussian_kernel(x, X_train)
+    
+    def matrix(self, X_train, gamma=None, convert_tesnor_to_matrix=True):
+        K_quad = self.quad_kernel.matrix(X_train, convert_tesnor_to_matrix=convert_tesnor_to_matrix, gamma=gamma)
+        K_rbf = self.gaussian_kernel.matrix(X_train, convert_tesnor_to_matrix=convert_tesnor_to_matrix)
 
         return K_quad + K_rbf
