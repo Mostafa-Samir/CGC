@@ -41,9 +41,8 @@ class BigKernel(BaseKernel):
         return jnp.power(jnp.dot(x, y), 3)
     
     def _periodic_eval(self, x, y, p, l):
-        diff = x - y
-        sin_factor = jnp.sin(jnp.pi * jnp.square(diff).sum() / p)
-        return jnp.exp(-2 * sin_factor * sin_factor / (l * l))
+        sin_factor = (jnp.sin(jnp.pi * (x - y) / p) / l) ** 2
+        return jnp.exp(-2 * jnp.sum(sin_factor))
     
     def _locally_periodic_eval(self, x, y, p, l, ll):
         #diff = x - y
@@ -72,7 +71,7 @@ class BigKernel(BaseKernel):
         #poly_exponant = params.get("poly_exponant")
 
 
-        return (gaussian_weight ** 2) * self._gaussian_eval(x, y, gaussian_width) + (quadratic_weight ** 2) * self._quadratic_eval(x, y, quadratic_constant)
+        return (gaussian_weight ** 2) * self._gaussian_eval(x, y, gaussian_width) + (quadratic_weight ** 2) * self._quadratic_eval(x, y, quadratic_constant) + (periodic_weight ** 2) * self._periodic_eval(x, y, periodic_periodicity, periodic_scale)
 
         #return #jnp.power(jnp.dot(x, y) + poly_constant, 2 * poly_exponant) \
                 #+(gaussian_weight ** 2) * self._gaussian_eval(x, y, gaussian_width) \
