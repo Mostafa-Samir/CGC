@@ -62,15 +62,23 @@ class BFGSOptimizer():
     def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 10000,  options={"ftol": 1e-6}):
         self.loss_fn = loss_fn
         self.jitted_loss = jax.jit(loss_fn)
-        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000, options={"ftol": 1e-6})
+        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000)
+        self.early_stopper = EarlyStopper(min_improvement, patience)
+        self.iteration_counter = 0
         #self.jitted_update_step = jax.jit(self._optimizer.update)
 
     def run(self, Z, X, M, description_prefix=""):
         pbar = trange(self._optimizer.maxiter)
         def progressbar_callback(Z):
+            self.iteration_counter += 1
             loss = self.jitted_loss(Z, X, M)
             pbar.set_description(f"{description_prefix} Loss: {loss:.4f}")
             pbar.update(1)
+
+            _, stop = self.early_stopper.check(loss, self.iteration_counter)
+            if stop:
+                print(f"Stopping after {self.early_stopper.patience} iterations with no improvements.")
+                return True
 
         self._optimizer.callback = progressbar_callback
 
@@ -91,9 +99,15 @@ class BFGSOptimizerForKF():
     def run(self, params, Z, M, original_params, trainable_mask):
         pbar = trange(self._optimizer.maxiter)
         def progressbar_callback(params):
+            self.iteration_counter += 1
             loss = self.jitted_loss(params, Z, M, original_params, trainable_mask)
             pbar.set_description(f"Loss: {loss:.4f}")
             pbar.update(1)
+
+            _, stop = self.early_stopper.check(loss, self.iteration_counter)
+            if stop:
+                print(f"Stopping after {self.early_stopper.patience} iterations with no improvements.")
+                raise StopIteration
 
         self._optimizer.callback = progressbar_callback
 
@@ -160,13 +174,13 @@ class GDOptimizerForKF:
     def update_step(self, params, Z):
         pass
 
-    def run(self, params, Z, M, original_params, trainable_mask, prefix=""):
+    def run(self, params, Z, M, original_params, trainable_mask, weights_mask, prefix=""):
         
         pbar = trange(self.iterations_max)
         for i in pbar:
-            loss = self.jitted_loss(params, Z, M, original_params, trainable_mask)
+            loss = self.jitted_loss(params, Z, M, original_params, trainable_mask, weights_mask)
             pbar.set_description(f"({prefix}) Loss: {loss:.9f}")
-            params = self.jitted_update_step(params, Z, M, original_params, trainable_mask)
+            params = self.jitted_update_step(params, Z, M, original_params, trainable_mask, weights_mask)
             _, stop = self.early_stopper.check(loss, i)
             if stop:
                 print(f"Stopped after {self.early_stopper.patience} steps with no improvment in Loss")
@@ -179,8 +193,8 @@ class GDOptimizerForKF:
 
 class NormalizedGDOptimizerForKF(GDOptimizerForKF):
 
-    def update_step(self, params, Z, M, original_params, trainable_mask):
-        g = self.loss_grad(params, Z, M, original_params, trainable_mask)
+    def update_step(self, params, Z, M, original_params, trainable_mask, weights_mask):
+        g = self.loss_grad(params, Z, M, original_params, trainable_mask, weights_mask)
         normed_g = g / jnp.linalg.norm(g)
         new_params = params - self.learning_rate * (normed_g * trainable_mask)
         return new_params
@@ -195,18 +209,14 @@ class TwoStepsNGDptimizerForKF(NormalizedGDOptimizerForKF):
 
          # Parameters Pass
         params_lernable_mask = trainable_mask * (1 - sparse_mask) * special_mask
-        kparams = super().run(params, Z, M, np.array(params), params_lernable_mask, prefix="Parameters Pass")
+        kparams = super().run(params, Z, M, np.array(params), params_lernable_mask, sparse_mask, prefix="Parameters Pass")
 
         self.early_stopper.reset()
 
         # Weights Pass
         weights_lernable_mask = trainable_mask * sparse_mask * special_mask
         self.learning_rate *= 10
-        wparams = super().run(kparams, Z, M, np.array(kparams), weights_lernable_mask, prefix="Weights Pass")
-        
-        
-
-
+        wparams = super().run(kparams, Z, M, np.array(kparams), weights_lernable_mask, sparse_mask, prefix="Weights Pass")
 
         return wparams
     

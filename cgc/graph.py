@@ -125,7 +125,7 @@ class ComputationalGraph:
     def _loss_params(self, params, Z, X, M):
         return self._loss(Z, X, M, params)
     
-    def _total_kflow_loss(self, params, Z, M, original_params, trainable_mask):
+    def _total_kflow_loss(self, params, Z, M, original_params, trainable_mask, weights_mask):
         total_loss = 0
         fn_names = list(sorted(self._unknown_functions.keys()))
         for i, fn_name in enumerate(fn_names):
@@ -328,7 +328,7 @@ class ComputationalGraph:
                 self.report_kernel_params()
 
             
-            optimizer_obj = optimizer_class(self._loss)
+            optimizer_obj = optimizer_class(self._loss, min_improvement=1, patience=100)
             Z = optimizer_obj.run(Z, X, M)
             current_loss = self._loss(Z, X, M)
 
@@ -347,7 +347,7 @@ class ComputationalGraph:
                     kflow_opt.early_stopper.reset()
 
                 params, trainable_mask, weights_mask = self._gather_parameters()
-                new_params = kflow_opt.run(params, Z[observations_end:, :],  M, original_params=params, trainable_mask=trainable_mask, sparse_mask=weights_mask)
+                new_params = kflow_opt.run(params, Z,  M, original_params=params, trainable_mask=trainable_mask, sparse_mask=weights_mask)
                 self._scatter_parameters(new_params)
                 self.report_kernel_params()
 
