@@ -24,6 +24,8 @@ class BigKernelParameters(BaseKernelParameters):
     #locally_periodic_scale: KernelParameter = KernelParameter(1.0, learnable=True)
     #locally_periodic_locality_scale: KernelParameter = KernelParameter(1.0, learnable=True)
     periodic_weight: KernelParameter = KernelParameter(1.0, learnable=True, weight=True)
+    #cubic_weight: KernelParameter = KernelParameter(1.0, learnable=True, weight=True)
+    #cubic_constant: KernelParameter = KernelParameter(1.0, learnable=True)
     #locally_periodic_weight: KernelParameter = KernelParameter(1.0, learnable=True)
 
 
@@ -61,6 +63,8 @@ class BigKernel(BaseKernel):
         periodic_periodicity = params.get("periodic_periodicity")
         periodic_scale = params.get("periodic_scale")
         periodic_weight = params.get("periodic_weight")
+        #cubic_constant = params.get("cubic_constant")
+        #cubic_weight = params.get("cubic_weight")
         #locally_periodic_periodicity = params.get("locally_periodic_periodicity")
         #locally_periodic_scale = params.get("locally_periodic_scale")
         #locally_periodic_locality_scale = params.get("locally_periodic_locality_scale")
@@ -70,8 +74,17 @@ class BigKernel(BaseKernel):
         #poly_weight = params.get("poly_weight")
         #poly_exponant = params.get("poly_exponant")
 
+        weights_sum = (gaussian_weight ** 2) + (quadratic_weight ** 2) + (periodic_weight ** 2) #+ (cubic_weight ** 2)
+        normlaized_periodic_weight = (periodic_weight ** 2) / weights_sum
+        normalized_gaussian_weight = (gaussian_weight ** 2) / weights_sum
+        normalized_quadratic_weight = (quadratic_weight ** 2) / weights_sum
+        #normalized_cubic_weight = (cubic_weight ** 2) / weights_sum
 
-        return (gaussian_weight ** 2) * self._gaussian_eval(x, y, gaussian_width) + (quadratic_weight ** 2) * self._quadratic_eval(x, y, quadratic_constant) + (periodic_weight ** 2) * self._periodic_eval(x, y, periodic_periodicity, periodic_scale)
+
+        return normalized_gaussian_weight * self._gaussian_eval(x, y, gaussian_width) \
+               + normalized_quadratic_weight * self._quadratic_eval(x, y, quadratic_constant) \
+               + normlaized_periodic_weight * self._periodic_eval(x, y, periodic_periodicity, periodic_scale) \
+               #+ normalized_cubic_weight * self._cubic_eval(x, y, cubic_constant)
 
         #return #jnp.power(jnp.dot(x, y) + poly_constant, 2 * poly_exponant) \
                 #+(gaussian_weight ** 2) * self._gaussian_eval(x, y, gaussian_width) \
