@@ -59,10 +59,10 @@ class ProjectedNGDOptimizer(GDOptimizer):
         return new_Z
     
 class BFGSOptimizer():
-    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 500000, min_improvement: float = 1, patience: int = 10000,  options={"ftol": 1e-6}):
+    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 1000000, min_improvement: float = 1, patience: int = 10000,  options={"ftol": 1e-6}):
         self.loss_fn = loss_fn
         self.jitted_loss = jax.jit(loss_fn)
-        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=10000)
+        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=iterations_max)
         self.early_stopper = EarlyStopper(min_improvement, patience)
         self.iteration_counter = 0
         #self.jitted_update_step = jax.jit(self._optimizer.update)
@@ -76,9 +76,9 @@ class BFGSOptimizer():
             pbar.update(1)
 
             _, stop = self.early_stopper.check(loss, self.iteration_counter)
-            if stop:
-                print(f"Stopping after {self.early_stopper.patience} iterations with no improvements.")
-                return True
+            #if stop:
+            #    print(f"Stopping after {self.early_stopper.patience} iterations with no improvements.")
+            #    raise StopIteration
 
         self._optimizer.callback = progressbar_callback
 
@@ -195,7 +195,11 @@ class NormalizedGDOptimizerForKF(GDOptimizerForKF):
 
     def update_step(self, params, Z, M, original_params, trainable_mask, weights_mask):
         g = self.loss_grad(params, Z, M, original_params, trainable_mask, weights_mask)
-        normed_g = g / jnp.linalg.norm(g)
+        non_nan_gradients = ~jnp.isnan(g)
+        non_nan_g = jnp.where(non_nan_gradients, g, 0)
+        g_norm = jnp.linalg.norm(g)
+        adjusted_g_norm = jnp.where(g_norm > 0.0, g_norm, 1.0)
+        normed_g = non_nan_g / adjusted_g_norm
         new_params = params - self.learning_rate * (normed_g * trainable_mask)
         return new_params
     

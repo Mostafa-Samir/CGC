@@ -21,9 +21,9 @@ class LocallyPeriodicKErnel(BaseKernel):
         ls = params.get("locality_scale")
 
         diff = x - y
-        sin_factor = jnp.sin(jnp.pi * jnp.abs(diff).sum() / p)
+        sin_factor = (jnp.sin(jnp.pi * (x - y) / p) / ps) ** 2
         scaled_diff = diff / ls
-        periodic_factor = jnp.exp(-2 * sin_factor * sin_factor / (ps * ps))
+        periodic_factor = jnp.exp(-2 * jnp.sum(sin_factor))
         locality_factor = jnp.exp(-0.5 * jnp.dot(scaled_diff, scaled_diff))
 
         return periodic_factor * locality_factor

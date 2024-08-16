@@ -98,7 +98,7 @@ class ComputationalGraph:
         self.data_compliance_loss_multipler = data_compliance_loss_multiplier
 
 
-    def _loss(self, Z, X, M, params=None):
+    def _loss(self, Z, X, M, params=None, return_separate=False):
         rkhs_norms = 0
         unknown_funcs_loss = 0
         data_compliance_loss = 0
@@ -120,7 +120,17 @@ class ComputationalGraph:
 
         total_loss = rkhs_norms + multipled_unknwon_funcs_loss + multiplied_constraints_loss + multiplied_data_compliance_loss
 
-        return total_loss
+        separate_loss = {
+            "rkhs_norm": rkhs_norms,
+            "unknown_funcs_loss": unknown_funcs_loss,
+            "constraints_loss": constraints_loss,
+            "data_compliance_loss": unknown_funcs_loss
+        }
+
+        if not return_separate:
+            return total_loss
+        else:
+            return total_loss, separate_loss
     
     def _loss_params(self, params, Z, X, M):
         return self._loss(Z, X, M, params)
@@ -323,7 +333,7 @@ class ComputationalGraph:
                     kflow_opt.early_stopper.reset()
 
                 params, trainable_mask, weights_mask = self._gather_parameters()
-                new_params = kflow_opt.run(params, Z[:observations_end, :],  M, original_params=params, trainable_mask=trainable_mask, sparse_mask=weights_mask)
+                new_params = kflow_opt.run(params, Z,  M, original_params=params, trainable_mask=trainable_mask, sparse_mask=weights_mask)
                 self._scatter_parameters(new_params)
                 self.report_kernel_params()
 
@@ -352,7 +362,7 @@ class ComputationalGraph:
                 self.report_kernel_params()
 
                 if i == n_rounds - 1:
-                    optimizer_obj = optimizer_class(self._loss)
+                    optimizer_obj = optimizer_class(self._loss, min_improvement=1, patience=100)
                     Z = optimizer_obj.run(Z, X, M)
                     current_loss = self._loss(Z, X, M)
 

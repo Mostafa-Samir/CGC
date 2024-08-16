@@ -20,4 +20,4 @@ class PolynomialKernel(BaseKernel):
 
         constant = params.get("constant")
         exponent = params.get("exponent")
-        return jnp.power((jnp.dot(x, y) + constant * constant), exponent)
+        return jnp.power(jnp.dot(x, y) + constant * constant, exponent)
