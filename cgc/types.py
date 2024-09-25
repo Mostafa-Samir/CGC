@@ -103,7 +103,7 @@ class UnknownFunction(Function):
         return jnp.square(observations.T @ jnp.linalg.solve(matrix, observations))
     
 
-    def kflow_loss_(self, params, Z, M, original_params, trainable_mask, sample_ratio=0.5, n_samples=20):
+    def kflow_loss(self, params, Z, M, original_params, trainable_mask, weights_mask=None, sample_ratio=0.5, n_samples=20):
 
         loss = 0
 
@@ -148,7 +148,7 @@ class UnknownFunction(Function):
 
         return loss
 
-    def kflow_loss(self, params, Z, M, original_params, trainable_mask, sample_ratio=0.5, n_samples=20):
+    def kflow_loss_(self, params, Z, M, original_params, trainable_mask, weights_mask=None, sample_ratio=0.5, n_samples=20):
 
         params_start, params_end = self.parameters_range
         params_array = params[params_start:params_end]
