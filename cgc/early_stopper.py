@@ -1,6 +1,6 @@
 """this module contains an implementation of early stopping strategy
 """
-from typing import Tuple
+from typing import Tuple, Any
 
 import numpy as np
 
@@ -34,11 +34,12 @@ class EarlyStopper:
         self.direction_multiplier = 1 if improvement_direction == "up" else -1
         self.improvement_type = improvement_type
 
+        self.best_params = None
         self.best_metric = None
         self.best_epoch = None
         self.waiting = 0
 
-    def check(self, metric: float, epoch_number: int) -> Tuple[bool, bool]:
+    def check(self, metric: float, epoch_number: int, params: Any) -> Tuple[bool, bool]:
         """checks if we should stop given the given metric
         Parameters
         ----------
@@ -60,6 +61,7 @@ class EarlyStopper:
         if self.best_metric is None:
             self.best_metric = metric
             self.best_epoch = epoch_number
+            self.best_params = params
         else:
             difference = self.direction_multiplier * (metric - self.best_metric)
             if self.improvement_type == 'relative':
@@ -68,6 +70,7 @@ class EarlyStopper:
             if difference >= self.min_improvement:
                 self.best_metric = metric
                 self.best_epoch = epoch_number
+                self.best_params = params
                 self.waiting = 1
                 improvement = True
             else:
@@ -81,3 +84,6 @@ class EarlyStopper:
         self.best_metric = None
         self.best_epoch = None
         self.waiting = 0
+
+    def get_best_params(self):
+        return self.best_params

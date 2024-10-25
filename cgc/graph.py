@@ -99,6 +99,7 @@ class ComputationalGraph:
 
 
     def _loss(self, Z, X, M, params=None, return_separate=False):
+        Z = jnp.where(M, X, Z)
         rkhs_norms = 0
         unknown_funcs_loss = 0
         data_compliance_loss = 0
@@ -315,7 +316,7 @@ class ComputationalGraph:
         self.set_uknknow_fns_parameters_range()
 
 
-        optimizer_class = NormalizedGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
+        optimizer_class = ProjectedNGDOptimizer if optimizer == "normalized-gd" else BFGSOptimizer
         
 
         Z = X.copy()

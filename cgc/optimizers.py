@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from jax.scipy.optimize import minimize
 from tqdm import trange
 from jaxopt import LBFGS, BFGS, ScipyMinimize
+import optax
 
 from cgc.early_stopper import EarlyStopper
 
@@ -25,15 +26,16 @@ class GDOptimizer:
     def update_step(self, Z, X, M):
         pass
 
-    def run(self, Z, X, M):
+    def run(self, Z, X, M, description_prefix=""):
 
         pbar = trange(self.iterations_max)
         for i in pbar:
             loss = self.jitted_loss(Z, X, M)
             pbar.set_description(f"Loss: {loss:.4f}")
             Z = self.jitted_update_step(Z, X, M)
-            _, stop = self.early_stopper.check(loss, i)
+            _, stop = self.early_stopper.check(loss, i, Z)
             if stop:
+                Z = self.early_stopper.get_best_params()
                 print(f"Stopped after {self.early_stopper.patience} steps with no improvment in Loss")
                 break
 
@@ -75,7 +77,7 @@ class BFGSOptimizer():
             pbar.set_description(f"{description_prefix} Loss: {loss:.4f}")
             pbar.update(1)
 
-            _, stop = self.early_stopper.check(loss, self.iteration_counter)
+            _, stop = self.early_stopper.check(loss, self.iteration_counter, Z)
             #if stop:
             #    print(f"Stopping after {self.early_stopper.patience} iterations with no improvements.")
             #    raise StopIteration
@@ -87,6 +89,16 @@ class BFGSOptimizer():
         pbar.close()
         
         return Z
+    
+
+class OptaxBFGSOptimizer:
+    def __init__(self, loss_fn: Callable, learning_rate: float = 0.01, iterations_max: int = 1000000, min_improvement: float = 1, patience: int = 10000,  options={"ftol": 1e-6}):
+        self.loss_fn = loss_fn
+        self.jitted_loss = jax.jit(loss_fn)
+        self._optimizer = ScipyMinimize(method="L-BFGS-B", fun=loss_fn, jit=True, maxiter=iterations_max)
+        self.early_stopper = EarlyStopper(min_improvement, patience)
+        self.iteration_counter = 0
+        #self.jitted_update_step = jax.jit(self._optimizer.update)
     
 
 class BFGSOptimizerForKF():
