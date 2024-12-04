@@ -11,7 +11,8 @@ requirements = [
     "numpy",
     "tqdm", 
     "jaxopt",
-    "vorpy"
+    "vorpy",
+    "dacite"
 ]
 
 dev_requirements = [
