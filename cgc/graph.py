@@ -99,7 +99,7 @@ class ComputationalGraph:
 
 
     def _loss(self, Z, X, M, params=None, return_separate=False):
-        Z = jnp.where(M, X, Z)
+        #Z = jnp.where(M, X, Z)
         rkhs_norms = 0
         unknown_funcs_loss = 0
         data_compliance_loss = 0
