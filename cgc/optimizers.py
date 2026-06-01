@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from jax.scipy.optimize import minimize
 from tqdm import trange
 from jaxopt import LBFGS, BFGS, ScipyMinimize
-import optax
+
 
 from cgc.early_stopper import EarlyStopper
 

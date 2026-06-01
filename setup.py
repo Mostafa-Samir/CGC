@@ -11,14 +11,15 @@ requirements = [
     "numpy",
     "tqdm", 
     "jaxopt",
-    "vorpy"
+    "vorpy",
+    "dacite"
 ]
 
 dev_requirements = [
     "matplotlib",
     "ipykernel",
     "jupyter",
-    "sklearn",
+    "scikit-learn",
     "pandas"
 ]
 
