@@ -701,8 +701,8 @@ if __name__ == "__main__":
     assert len(columns) == len(set(columns))
 
     experiements = [
-        #("ms", generate_ms_data, build_1d_graph),
-        #("m2s3", generate_m2s3_data, build_2d_graph),
+        ("ms", generate_ms_data, build_1d_graph),
+        ("m2s3", generate_m2s3_data, build_2d_graph),
         ("hh", generate_hh_data, build_2d_graph),
         ("np", generate_np_data, build_1d_graph)
     ]
@@ -758,21 +758,6 @@ if __name__ == "__main__":
                 num_runs += 1
                 seed += 1
                 jax.clear_caches()
-
-            #for i in range(num_rounds):
-            #    X_true, X_2d, Z, M, *errors = run_for(data_generator, graph_builder, sparsity_factor, seed=i, return_errors_only=False)
-            #    for col, val in zip(columns, errors):
-            #        results_dict[col].append(val)
-#
-            #    _, _, one_step_re_p, one_step_re_q, *_ = errors
-            #    avg_err = (one_step_re_p + one_step_re_q) / 2
-            #    if avg_err < best_error:
-            #        best_X_2d = X_2d
-            #        best_Z = Z
-            #        best_M = M
-            #    
-            #    jax.clear_caches()
-            #    jax.clear_backends()
 
 
             for col in active_columns:
