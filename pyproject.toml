@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cgc"
+version = "0.1.0"
+description = "CGC: Computational Graph Completion"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+  { name = "Mostafa Samir", email = "mostafa.3210@gmail.com" }
+]
+keywords = [
+    "matrix completion", 
+    "computational graph", 
+    "gaussian process", 
+    "regression"
+]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Natural Language :: English",
+    "License :: OSI Approved :: MIT License"
+]
+dependencies = [
+    "jax",
+    "jaxlib",
+    "numpy",
+    "tqdm", 
+    "jaxopt",
+    "vorpy",
+    "dacite"
+]
+
+[project.urls]
+Homepage = "https://github.com/Mostafa-Samir/CGC"
+
+[project.optional-dependencies]
+dev = [
+    "matplotlib",
+    "ipykernel",
+    "jupyter",
+    "scikit-learn",
+    "pandas"
+]
+cuda13 = [
+    "jax[cuda13]",
+    "jaxlib[cuda13]",
+]
+cuda12 = [
+    "jax[cuda12]",
+    "jaxlib[cuda12]",
+]
+
+[tool.setuptools.packages.find]
+include = ["cgc", "cgc.*"]
