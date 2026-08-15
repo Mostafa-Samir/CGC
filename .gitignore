@@ -165,3 +165,7 @@ vscode
 *.tex
 *.run
 *.zip
+plots*
+tables
+multi-trajectories-hh
+multi-trajectories-ms
