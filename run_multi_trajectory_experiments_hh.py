@@ -47,15 +47,10 @@ Q_KERNEL = "gaussian"
 Q_KERNEL_PARAMS = {"scale": KP(1.0, learnable=True)}
 Q_KERNEL_NUGGET = 1e-5
 
-TRUE_COEFS = jnp.asarray([0, 0, 0.5, 0, 0, 0, 0.5, 0])
+TRUE_COEFS = jnp.asarray([0, 0, 0, 0.5, 0, 0.5, 0, 0, 0, 0, 0, 0, 0, 0.5, 0, 0.5, 0, 1, 0, -(1/3)])
 
-TRAIN_BANDS = [(0.1, 0.3), (0.5, 0.7)]
-TEST_BANDS = [(0.35, 0.45), (0.75, 1)]
-
-def get_hamiltonian_from(graph: ComputationalGraph, Z):
-    """Retunr a callable for the learned hamiltonina from CGC."""
-    H_fn = graph._unknown_functions["H"]
-    return lambda pq: H_fn._f(pq, H_fn.parameter(Z), H_fn.observation(Z))
+TRAIN_BANDS = [(0.02, 0.08), (0.11, 0.13)] 
+TEST_BANDS = [(0.09, 0.11), (0.13, 0.15)]
 
 
 def __reduce_mask(nd_mask):
@@ -89,11 +84,11 @@ def one_step_hamiltonian(Z, observations_end, num_trajectories=1):
     H_kernel = KernelsFactory.create(H_KERNEL, H_KERNEL_PARAMS, H_KERNEL_NUGGET, linear_functional=jax.jacobian)
 
     _, pq_size = Z.shape
-    ndims = (pq_size - 4) // 2
-    p_start, p_end = 3, ndims + 3
-    q_start, q_end = ndims + 3, 2 * ndims + 3
+    ndims = (pq_size - 6) // 2
+    p_start, p_end = 5, ndims + 5
+    q_start, q_end = ndims + 5, 2 * ndims + 5
 
-    T_train = Z[:observations_end * num_trajectories, 0:3]
+    T_train = Z[:observations_end * num_trajectories, 0:5]
     P_train = Z[:observations_end * num_trajectories, p_start:p_end]
     Q_train = Z[:observations_end * num_trajectories, q_start:q_end]
 
@@ -120,9 +115,10 @@ def one_step_hamiltonian(Z, observations_end, num_trajectories=1):
 
     PQ_train = jnp.concatenate((P_train, Q_train), axis=1)
     QP_DOT_train = jnp.concatenate((
-            jnp.squeeze(jax.jit(jax.vmap(q_dot))(T_train))[:, 0],
-            jnp.squeeze(-jax.jit(jax.vmap(p_dot))(T_train))[:, 0]
-        )
+            jnp.squeeze(jax.jit(jax.vmap(q_dot))(T_train))[:, :, 0],
+            jnp.squeeze(-jax.jit(jax.vmap(p_dot))(T_train))[:, :, 0]
+        ),
+        axis=1
     )
 
     H_matrix = H_kernel.matrix(PQ_train)
@@ -138,7 +134,6 @@ def one_step_hamiltonian(Z, observations_end, num_trajectories=1):
     
     return H
 
-
 def two_steps_pqH(X, M, observations_end, use_T_in_second_step=False, num_trajectories=1):
     p_kernel = KernelsFactory.create(P_KERNEL, P_KERNEL_PARAMS, P_KERNEL_NUGGET)
     q_kernel = KernelsFactory.create(Q_KERNEL, Q_KERNEL_PARAMS, Q_KERNEL_NUGGET)
@@ -146,13 +141,13 @@ def two_steps_pqH(X, M, observations_end, use_T_in_second_step=False, num_trajec
 
 
     _, pq_size = X.shape
-    ndims = (pq_size - 4) // 2
-    p_start, p_end = 3, ndims + 3
-    q_start, q_end = ndims + 3, 2 * ndims + 3
-    true_observations_mask = __reduce_mask(M[:observations_end * num_trajectories, 3:pq_size - 1])
+    ndims = (pq_size - 6) // 2
+    p_start, p_end = 5, ndims + 5
+    q_start, q_end = ndims + 5, 2 * ndims + 5
+    true_observations_mask = __reduce_mask(M[:observations_end * num_trajectories, 5:pq_size - 1])
 
-    T_ghost = X[:observations_end * num_trajectories, 0:3]
-    T_train = X[:observations_end * num_trajectories, 0:3][true_observations_mask]
+    T_ghost = X[:observations_end * num_trajectories, 0:5]
+    T_train = X[:observations_end * num_trajectories, 0:5][true_observations_mask]
     P_train = X[:observations_end * num_trajectories, p_start:p_end][true_observations_mask]
     Q_train = X[:observations_end * num_trajectories, q_start:q_end][true_observations_mask]
 
@@ -180,16 +175,17 @@ def two_steps_pqH(X, M, observations_end, use_T_in_second_step=False, num_trajec
     if use_T_in_second_step:
         PQ_train = jnp.concatenate((jax.jit(jax.vmap(p))(T_ghost), jax.jit(jax.vmap(q))(T_ghost)), axis=1)
         QP_DOT_train = jnp.concatenate((
-                jnp.squeeze(jax.jit(jax.vmap(q_dot))(T_ghost))[:, 0][:, jnp.newaxis], 
-                jnp.squeeze(-jax.jit(jax.vmap(p_dot))(T_ghost))[:, 0][:, jnp.newaxis])
+                jnp.squeeze(jax.jit(jax.vmap(q_dot))(T_ghost))[:, :, 0], 
+                jnp.squeeze(-jax.jit(jax.vmap(p_dot))(T_ghost))[:, :, 0])
             , axis=1)
     else:
         PQ_train = jnp.concatenate((P_train, Q_train), axis=1)
         QP_DOT_train = jnp.concatenate((
-                jnp.squeeze(jax.jit(jax.vmap(q_dot))(T_train))[:, 0],
-                jnp.squeeze(-jax.jit(jax.vmap(p_dot))(T_train))[:, 0]
+                jnp.squeeze(jax.jit(jax.vmap(q_dot))(T_train))[:, :, 0],
+                jnp.squeeze(-jax.jit(jax.vmap(p_dot))(T_train))[:, :, 0]
             )
         )
+
 
     H_matrix = H_kernel.matrix(PQ_train)
     H_y_train = _adjust_y_train_shape(H_matrix, QP_DOT_train)
@@ -197,6 +193,7 @@ def two_steps_pqH(X, M, observations_end, use_T_in_second_step=False, num_trajec
 
     def H(pq):
         sims = H_kernel(pq, PQ_train)
+
         sims = _adjust_sims_shape(H_matrix, sims)
 
         return jnp.squeeze(sims @ inv)
@@ -219,41 +216,42 @@ def integerate_H_est(H_est, init_point, time, dims=1):
 
     return pq
 
-def initialize_X_for_one_step(X, M, p_fn, q_fn, H_fn, observations_end, num_trajictories):
+def initialize_X_for_one_step(X, M, p_fn, q_fn, H_fn, obssrvations_end, num_trajectories, dims=1):
     
     _, pq_size = X.shape
     X_initialized = X.copy()
-    extra_steps = N - observations_end
+    extra_steps = N - obssrvations_end
 
     T = X[:, 0]
-    true_observations_mask = __reduce_mask(M[:observations_end * num_trajictories, 3:pq_size - 1])
+    true_observations_mask = __reduce_mask(M[:obssrvations_end * num_trajectories, 5:pq_size - 1])
     
-    for i in range(num_trajictories):
+    for i in range(num_trajectories):
 
-        init_point = X[observations_end * (i + 1)  - 1, 3:pq_size - 1]
+        init_point = X[obssrvations_end * (i + 1)  - 1, 5:pq_size - 1]
         
-        extrapolation_time_start = observations_end * num_trajictories
+        extrapolation_time_start = obssrvations_end * num_trajectories
         extrapolation_time = np.concatenate((
-            np.reshape(T[observations_end * (i + 1) - 1], (1,)), 
+            np.reshape(T[obssrvations_end * (i + 1) - 1], (1,)), 
             T[extrapolation_time_start + extra_steps * i: extrapolation_time_start + extra_steps * (i + 1)]
         ), axis=0)
 
-        pq_2s = integerate_H_est(H_fn, init_point, extrapolation_time)
+        pq_2s = integerate_H_est(H_fn, init_point, extrapolation_time, dims=dims)
 
-        X_initialized[extrapolation_time_start + extra_steps * i: extrapolation_time_start + extra_steps * (i + 1), 3:pq_size - 1] = pq_2s[1:, :]
+        X_initialized[extrapolation_time_start + extra_steps * i: extrapolation_time_start + extra_steps * (i + 1), 5:pq_size - 1] = pq_2s[1:, :]
 
     pq_interpolated = jnp.concatenate((
-            jax.jit(jax.vmap(p_fn))(X[:observations_end * num_trajictories, 0:3]),
-            jax.jit(jax.vmap(q_fn))(X[:observations_end * num_trajictories, 0:3])
+            jax.jit(jax.vmap(p_fn))(X[:obssrvations_end * num_trajectories, 0:5]),
+            jax.jit(jax.vmap(q_fn))(X[:obssrvations_end * num_trajectories, 0:5])
         ),
         axis=1
     )
 
-    X_initialized[:observations_end * num_trajictories, 3:pq_size - 1][~true_observations_mask] = pq_interpolated[~true_observations_mask, :]
-    H_init = jax.jit(jax.vmap(H_fn))(X_initialized[:, 3:pq_size - 1])
+    X_initialized[:obssrvations_end * num_trajectories, 5:pq_size - 1][~true_observations_mask] = pq_interpolated[~true_observations_mask, :]
+    H_init = jax.jit(jax.vmap(H_fn))(X_initialized[:, 5:pq_size - 1])
     X_initialized[:, pq_size - 1] = H_init
 
     return X_initialized
+
 
 
 def initalize_one_step_loss_multipliers(graph, X_init, M):
@@ -275,9 +273,9 @@ def get_seprable_H_coef(Z, observations_end, num_trajectories = 1):
     H_kernel = KernelsFactory.create(H_KERNEL, H_KERNEL_PARAMS, H_KERNEL_NUGGET)
 
     _, pq_size = Z.shape
-    ndims = (pq_size - 4) // 2
-    p_start, p_end = 3, ndims + 3
-    q_start, q_end = ndims + 3, 2 * ndims + 3
+    ndims = (pq_size - 6) // 2
+    p_start, p_end = 5, ndims + 5
+    q_start, q_end = ndims + 5, 2 * ndims + 5
 
     H_estimated = Z[:observations_end * num_trajectories, -1]
     P_train = Z[:observations_end * num_trajectories, p_start:p_end]
@@ -309,20 +307,24 @@ def mse(truth: np.ndarray, predictions: np.ndarray, ):
 def relative_error(truth: np.ndarray, predictions: np.ndarray):
     return np.linalg.norm((truth - predictions), ord=2) / np.linalg.norm(truth, ord=2)
 
+def h_true(p1, p2, q1, q2):
+    return 0.5 * (q1 ** 2 + q2 ** 2 + p1 ** 2 + p2 ** 2) + q2 * q1 ** 2 - (1/3) * q2 ** 3
+
+def hh_system_ode(pq, t):
+    p1, p2, q1, q2 = pq
+    h_grad = [
+        -q1 - 2 * q1 * q2,
+        -q2 - q1 ** 2 + q2 ** 2,
+        p1,
+        p2
+    ]
+
+    return h_grad
+
+t = np.linspace(0, T_MAX, N)
+
 def generate_trajectory(p0q0):
-
-    def ms_system_ode(pq, t):
-        p, q = pq
-        h_grad = [
-            -q,
-            p
-        ]
-
-        return h_grad
-
-    t = np.linspace(0, T_MAX, N)
-
-    return odeint(ms_system_ode, p0q0, t)
+    return odeint(hh_system_ode, p0q0, t)
 
 
 def generate_data():
@@ -337,32 +339,34 @@ def generate_data():
     generated_test_trajectories_count = 0
     generated_train_trajectories_count = 0
 
-    attempts = 0    
+    attempts = 0
 
     while True:
 
         if (generated_test_trajectories_count == N_TRAJICTORIES_TEST) and (generated_train_trajectories_count == MAX_N_TRAJICTORIES_TRAIN):
             break
 
-        p0 = rng.uniform(-1., 1.)
-        q0 = rng.uniform(-1., 1.)
+        p10 = rng.uniform(-0.5, 0.5)
+        q10 = rng.uniform(-0.5, 0.5)
+        p20 = rng.uniform(-0.5, 0.5)
+        q20 = rng.uniform(-0.5, 0.5)
 
-        energy = 0.5 * (p0 ** 2 + q0 ** 2)
+        energy = h_true(p10, p20, q10, q20)
 
-        is_training_trajectory = any(low <= energy <= high for low, high in TRAIN_BANDS)
-        is_test_trajectory = any(low <= energy <= high for low, high in TEST_BANDS)
+        is_training_trajectory = any(low < energy < high for low, high in TRAIN_BANDS)
+        is_test_trajectory = any(low < energy < high for low, high in TEST_BANDS)
 
         if is_test_trajectory or is_training_trajectory:
             assert is_test_trajectory != is_training_trajectory
 
         if is_training_trajectory and (generated_train_trajectories_count < MAX_N_TRAJICTORIES_TRAIN):
-            training_initial_conds.append((p0, q0))
-            training_trajectories.append(generate_trajectory((p0, q0)))
+            training_initial_conds.append((p10, p20, q10, q20))
+            training_trajectories.append(generate_trajectory((p10, p20, q10, q20)))
             generated_train_trajectories_count += 1
 
         if is_test_trajectory and (generated_test_trajectories_count < N_TRAJICTORIES_TEST):
-            test_initial_conds.append((p0, q0))
-            test_trajectories.append(generate_trajectory((p0, q0)))
+            test_initial_conds.append((p10, p20, q10, q20))
+            test_trajectories.append(generate_trajectory((p10, p20, q10, q20)))
             generated_test_trajectories_count += 1
 
         attempts += 1
@@ -384,8 +388,8 @@ def generate_Xs_M(training_trajectories, training_initial_conds, seed, sparsity_
     t = np.linspace(0, T_MAX, N)
 
     for p0q0, pq in zip(training_initial_conds, training_trajectories):
-        p, q = pq.T
-        H = 0.5 * (p ** 2 + q ** 2)
+        p10, p20, q10, q20 = pq.T
+        H = h_true(p10, p20, q10, q20)
 
         all_trajectories_observed.append(pq[:OBSERVATIONS_END, :])
         all_trajectories_hidden.append(pq[OBSERVATIONS_END:, :])
@@ -426,11 +430,13 @@ def generate_Xs_M(training_trajectories, training_initial_conds, seed, sparsity_
         sparse_mask = rng.choice([False, True], p=[sparsity_factor, 1 - sparsity_factor], size=OBSERVATIONS_END)
         sparse_mask[-1] = True
 
-        M[OBSERVATIONS_END * i: OBSERVATIONS_END * (i + 1), 3] = sparse_mask
-        M[OBSERVATIONS_END * i: OBSERVATIONS_END * (i + 1), 4] = sparse_mask
+        M[OBSERVATIONS_END * i: OBSERVATIONS_END * (i + 1), 5] = sparse_mask
+        M[OBSERVATIONS_END * i: OBSERVATIONS_END * (i + 1), 6] = sparse_mask
+        M[OBSERVATIONS_END * i: OBSERVATIONS_END * (i + 1), 7] = sparse_mask
+        M[OBSERVATIONS_END * i: OBSERVATIONS_END * (i + 1), 8] = sparse_mask
 
     M[OBSERVATIONS_END * num_trajectories:, 3:5] = False
-    M[:, 5] = False
+    M[:, 9] = False
 
     X = np.full_like(X_true, fill_value=0)
     X[M] = X_true[M]
@@ -440,46 +446,55 @@ def generate_Xs_M(training_trajectories, training_initial_conds, seed, sparsity_
 
 def generate_graph():
 
-    ms_graph = ComputationalGraph(observables_order=["t", "p0", "q0", "p", "q", "H"])
+    hh_graph = ComputationalGraph(observables_order=["t", "p10", "p20", "q10", "q20", "p1", "p2", "q1", "q2", "H"])
 
-    ms_graph.add_observable("t")
-    ms_graph.add_observable("p0")
-    ms_graph.add_observable("q0")
+    hh_graph.add_observable("t")
+    hh_graph.add_observable("p10")
+    hh_graph.add_observable("p20")
+    hh_graph.add_observable("q10")
+    hh_graph.add_observable("q20")
 
-    ms_graph.add_aggregator(["t", "p0", "q0"], "tp0q0")
+    hh_graph.add_aggregator(["t", "p10", "p20", "q10", "q20"], "tp0q0")
 
-    ms_graph.add_unknown_fn("tp0q0", "q", alpha=P_KERNEL_NUGGET, kernel=P_KERNEL, kernel_parameters=P_KERNEL_PARAMS)
-    ms_graph.add_unknown_fn("tp0q0", "p", alpha=Q_KERNEL_NUGGET, kernel=Q_KERNEL, kernel_parameters=Q_KERNEL_PARAMS)
+    hh_graph.add_unknown_fn("tp0q0", "q1", alpha=P_KERNEL_NUGGET, kernel=P_KERNEL, kernel_parameters=P_KERNEL_PARAMS)
+    hh_graph.add_unknown_fn("tp0q0", "p1", alpha=Q_KERNEL_NUGGET, kernel=Q_KERNEL, kernel_parameters=Q_KERNEL_PARAMS)
+    hh_graph.add_unknown_fn("tp0q0", "q2", alpha=P_KERNEL_NUGGET, kernel=P_KERNEL, kernel_parameters=P_KERNEL_PARAMS)
+    hh_graph.add_unknown_fn("tp0q0", "p2", alpha=Q_KERNEL_NUGGET, kernel=Q_KERNEL, kernel_parameters=Q_KERNEL_PARAMS)
 
-    ms_graph.add_known_fn("p", "p_grad", derivative)
-    ms_graph.add_known_fn("q", "q_grad", derivative)
+    hh_graph.add_known_fn("p1", "p1_grad", derivative)
+    hh_graph.add_known_fn("p2", "p2_grad", derivative)
+    hh_graph.add_known_fn("q1", "q1_grad", derivative)
+    hh_graph.add_known_fn("q2", "q2_grad", derivative)
 
-    ms_graph.add_known_fn("p_grad", "p_dot", lambda p_grad: p_grad[:, 0])
-    ms_graph.add_known_fn("q_grad", "q_dot", lambda q_grad: q_grad[:, 0])
+    hh_graph.add_known_fn("p1_grad", "p1_dot", lambda p1_grad: p1_grad[:, 0])
+    hh_graph.add_known_fn("q1_grad", "q1_dot", lambda q1_grad: q1_grad[:, 0])
+    hh_graph.add_known_fn("p2_grad", "p2_dot", lambda p2_grad: p2_grad[:, 0])
+    hh_graph.add_known_fn("q2_grad", "q2_dot", lambda q2_grad: q2_grad[:, 0])
 
-    ms_graph.add_known_fn("p_dot", "-p_dot", lambda p_dot: -p_dot)
+    hh_graph.add_aggregator(["q1_dot", "q2_dot"], "q_dot")
+    hh_graph.add_aggregator(["p1_dot", "p2_dot"], "p_dot")
+    hh_graph.add_known_fn("p_dot", "-p_dot", lambda p_dot: -p_dot)
 
-    ms_graph.add_aggregator(["q_dot", "-p_dot"], "qp_dot")
+    hh_graph.add_aggregator(["q_dot", "-p_dot"], "qp_dot")
+    hh_graph.add_aggregator(["p1", "p2", "q1", "q2"], "pq")
 
-    ms_graph.add_aggregator(["p", "q"], "pq")
-    ms_graph.add_unknown_fn("pq", "H", linear_functional=jax.jacobian, observations="qp_dot", alpha=H_KERNEL_NUGGET, kernel=H_KERNEL, kernel_parameters=H_KERNEL_PARAMS)
-    ms_graph.add_known_fn("H", "grad_H", derivative)
+    hh_graph.add_unknown_fn("pq", "H", linear_functional=jax.jacobian, observations="qp_dot", alpha=H_KERNEL_NUGGET, kernel=H_KERNEL, kernel_parameters=H_KERNEL_PARAMS)
+    hh_graph.add_known_fn("H", "grad_H", derivative)
 
-    ms_graph.add_aggregator(["q_dot", "grad_H"], "(q_dot, grad_H)")
-    ms_graph.add_aggregator(["p_dot", "grad_H"], "(p_dot, grad_H)")
+    hh_graph.add_aggregator(["p_dot", "grad_H"], "(p_dot, grad_H)")
+    def p_dot_constraint(p_dot_grad_H):
+        p_dot, grad_H = p_dot_grad_H[:, :2], p_dot_grad_H[:, 2:]
+        return p_dot + grad_H[:, 2:]
 
-    def p_dot_constraint(p_dot_grad_H): 
-        p_dot, grad_H = p_dot_grad_H[:, 0], p_dot_grad_H[:, 1:]
-        return p_dot + grad_H[:, 1]
-
+    hh_graph.add_aggregator(["q_dot", "grad_H"], "(q_dot, grad_H)")
     def q_dot_constraint(q_dot_grad_H):
-        q_dot, grad_H = q_dot_grad_H[:, 0], q_dot_grad_H[:, 1:]
-        return q_dot - grad_H[:, 0]
+        q_dot, grad_H = q_dot_grad_H[:, :2], q_dot_grad_H[:, 2:]
+        return q_dot - grad_H[:, :2]
 
-    ms_graph.add_constraint("(p_dot, grad_H)", "W1", p_dot_constraint)
-    ms_graph.add_constraint("(q_dot, grad_H)", "W2", q_dot_constraint)
+    hh_graph.add_constraint("(p_dot, grad_H)", "W1", p_dot_constraint)
+    hh_graph.add_constraint("(q_dot, grad_H)", "W2", q_dot_constraint)
 
-    return ms_graph
+    return hh_graph
 
 
 def get_test_errors(H_est, test_initial_conds, test_trajectories):
@@ -493,7 +508,7 @@ def get_test_errors(H_est, test_initial_conds, test_trajectories):
 
     for init_cond, pq_true in tqdm(zip(test_initial_conds, test_trajectories)):
 
-        pq_pred = integerate_H_est(H_est, init_cond, t)
+        pq_pred = integerate_H_est(H_est, init_cond, t, dims=2)
         p_mse_errors.append(mse(pq_true[:, 0], pq_pred[:, 0]))
         p_re_errors.append(relative_error(pq_true[:, 0], pq_pred[:, 0]) * 100)
         q_mse_errors.append(mse(pq_true[:, 1], pq_pred[:, 1]))
@@ -510,7 +525,7 @@ def run_for(n_trajectories, sparsity_factor, seed, train_set, test_set):
     graph = generate_graph()
 
     p_2s, q_2s, H_2s = two_steps_pqH(X, M, OBSERVATIONS_END, num_trajectories=n_trajectories, use_T_in_second_step=True)
-    X_init = initialize_X_for_one_step(X, M, p_2s, q_2s, H_2s, OBSERVATIONS_END, n_trajectories)
+    X_init = initialize_X_for_one_step(X, M, p_2s, q_2s, H_2s, OBSERVATIONS_END, n_trajectories, dims=2)
     unknown_functions_loss_multiplier, constraint_loss_multiplier, data_compliance_loss_multiplier = initalize_one_step_loss_multipliers(graph, X_init, M)
 
     estimated_coefs_2s = get_seprable_H_coef(X_init, OBSERVATIONS_END, n_trajectories)
@@ -541,11 +556,11 @@ def run_for(n_trajectories, sparsity_factor, seed, train_set, test_set):
 
 if __name__ == "__main__":
 
-    experiment_dir = f"up-to-{MAX_N_TRAJICTORIES_TRAIN}-with-{N_ROUNDS}-rounds"
+    experiment_dir = f"hh-up-to-{MAX_N_TRAJICTORIES_TRAIN}-with-{N_ROUNDS}-rounds"
     os.makedirs(experiment_dir, exist_ok=True)
 
     training_trajectories, training_initial_conds, test_trajectories, test_initial_conds = generate_data()
-    sparsity_factors = [0]
+    sparsity_factors = [0, 0.9]
     
     for factor in sparsity_factors:
 
